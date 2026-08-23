@@ -49,6 +49,9 @@ pub fn run(
     }
 
     let container_name = cfg.container_name(&ws);
+    if docker::container_exists(&container_name)? {
+        docker::ensure_container_matches_workspace(&container_name, &ws)?;
+    }
     let exec_user = user
         .filter(|u| !u.is_empty())
         .or_else(|| cfg.remote_user.clone())
@@ -64,9 +67,10 @@ pub fn run(
         .iter()
         .map(|(k, v)| {
             let target = exec_workdir.as_deref().unwrap_or(&default_target);
+            let resolved = docker::resolve_container_env_value(v, &cfg.container_env);
             (
                 k.clone(),
-                docker::expand_vars_for_host_with_target(v, &ws, target),
+                docker::expand_vars_for_host_with_target(&resolved, &ws, target),
             )
         })
         .collect();

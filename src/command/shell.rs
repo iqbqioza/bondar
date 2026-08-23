@@ -34,6 +34,9 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     }
 
     let container_name = cfg.container_name(&ws);
+    if docker::container_exists(&container_name)? {
+        docker::ensure_container_matches_workspace(&container_name, &ws)?;
+    }
     let user = cfg
         .remote_user
         .clone()
@@ -53,9 +56,10 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         .iter()
         .map(|(k, v)| {
             let target = workdir.as_deref().unwrap_or(&default_target);
+            let resolved = crate::docker::resolve_container_env_value(v, &cfg.container_env);
             (
                 k.clone(),
-                crate::docker::expand_vars_for_host_with_target(v, &ws, target),
+                crate::docker::expand_vars_for_host_with_target(&resolved, &ws, target),
             )
         })
         .collect();

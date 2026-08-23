@@ -249,7 +249,7 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand` (so lat
 
 - Features are fetched with `oras` (or `docker pull` as a fallback), extracted if needed, copied into the container, and executed via `install.sh` as root.
 - Options are passed as environment variables to `install.sh` (`installsAfter` is excluded).
-- `installsAfter` (from the feature metadata or options) orders independent features; unknown dependencies are warned.
+- `installsAfter` declared in the `devcontainer.json` feature entry orders independent features; unknown dependencies are warned. The `installsAfter` value found in a feature's own metadata is reported but does not reorder already-determined install steps.
 - Features are installed only when the container is created, not on restart.
 - `customizations` declared by features are merged and stored as a container label.
 
@@ -301,6 +301,11 @@ Warnings are emitted when the host does not satisfy the requirements (not enforc
 - `exec`/`shell` propagate the container command exit code.
 - `read-configuration` exits with code 1 when the configuration is invalid.
 - All other errors exit with code 1.
+
+## Workspace isolation
+
+- The container name is derived from `name` (or the workspace directory basename). Two workspaces sharing the same basename would collide on `bondar-{basename}`; bondar verifies the container's `devcontainer.local_folder` label before attaching, starting or removing it, and refuses to touch a container that belongs to a different workspace.
+- Compose projects get a stable per-workspace project name (`bondar-<hash>`), so compose containers never collide either.
 
 ## Background processes
 

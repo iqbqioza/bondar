@@ -57,6 +57,7 @@ pub fn run(
             "Container {container_name} does not exist"
         )));
     }
+    docker::ensure_container_matches_workspace(&container_name, &ws)?;
 
     let mut cmd = Command::new("docker");
     cmd.arg("logs");

@@ -48,11 +48,15 @@ pub fn build_image(
         .ok_or_else(|| BondarError::Config("No 'build' section found, cannot build".to_string()))?;
 
     let config_dir = config_path.parent().unwrap_or(workspace_folder);
+    // ${containerWorkspaceFolder} in build inputs resolves to the configured
+    // workspaceFolder (default "/workspace")
+    let workspace_target = config.workspace_folder_or_default();
     let dockerfile = build
         .dockerfile
         .clone()
         .unwrap_or_else(|| "Dockerfile".to_string());
-    let dockerfile = expand_vars_for_host(&dockerfile, workspace_folder);
+    let dockerfile =
+        expand_vars_for_host_with_target(&dockerfile, workspace_folder, &workspace_target);
     let dockerfile_path = config_dir.join(&dockerfile);
 
     if !dockerfile_path.exists() {
@@ -66,7 +70,7 @@ pub fn build_image(
         .context
         .as_ref()
         .map(|c| {
-            let expanded = expand_vars_for_host(c, workspace_folder);
+            let expanded = expand_vars_for_host_with_target(c, workspace_folder, &workspace_target);
             config_dir.join(&expanded)
         })
         .unwrap_or_else(|| config_dir.to_path_buf());
@@ -84,7 +88,7 @@ pub fn build_image(
     cmd.arg("-t").arg(image_name);
 
     for (k, v) in &build.args {
-        let expanded = expand_vars_for_host(v, workspace_folder);
+        let expanded = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
         cmd.arg("--build-arg").arg(format!("{k}={expanded}"));
     }
 
@@ -93,19 +97,21 @@ pub fn build_image(
     }
 
     for opt in &build.options {
-        let expanded = expand_vars_for_host(opt, workspace_folder);
+        let expanded = expand_vars_for_host_with_target(opt, workspace_folder, &workspace_target);
         cmd.arg(&expanded);
     }
 
     if let Some(cache_from) = &build.cache_from {
         match cache_from {
             crate::config::CacheFromValue::Single(s) => {
-                let expanded = expand_vars_for_host(s, workspace_folder);
+                let expanded =
+                    expand_vars_for_host_with_target(s, workspace_folder, &workspace_target);
                 cmd.arg("--cache-from").arg(expanded);
             }
             crate::config::CacheFromValue::Multiple(vec) => {
                 for s in vec {
-                    let expanded = expand_vars_for_host(s, workspace_folder);
+                    let expanded =
+                        expand_vars_for_host_with_target(s, workspace_folder, &workspace_target);
                     cmd.arg("--cache-from").arg(expanded);
                 }
             }
@@ -197,6 +203,48 @@ pub fn container_exists(name: &str) -> Result<bool> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.lines().any(|line| line.trim() == name))
+}
+
+/// The workspace path a container was created for (from its label), if any.
+pub fn container_workspace(name: &str) -> Result<Option<String>> {
+    let output = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"devcontainer.local_folder\"}}",
+            name,
+        ])
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to inspect container {name}: {e}")))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let label = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if label.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(label))
+    }
+}
+
+/// Fail when an existing container with this name was created for a different
+/// workspace. Two workspaces sharing the same directory basename collide on
+/// `bondar-{basename}`; without this check `up`/`exec`/`down` would operate on
+/// (or remove) the other workspace's container.
+pub fn ensure_container_matches_workspace(name: &str, workspace_folder: &Path) -> Result<()> {
+    let ws_str = workspace_folder.to_string_lossy().to_string();
+    match container_workspace(name)? {
+        Some(label) if label == ws_str => Ok(()),
+        Some(label) => Err(BondarError::Docker(format!(
+            "Container '{name}' already exists for workspace '{label}' (current: '{ws_str}'); set a unique 'name' in devcontainer.json or remove that container first"
+        ))),
+        None => {
+            eprintln!(
+                "Warning: container '{name}' has no workspace label; assuming it belongs to this workspace"
+            );
+            Ok(())
+        }
+    }
 }
 
 pub fn container_running(name: &str) -> Result<bool> {
@@ -849,10 +897,6 @@ fn is_port_or_range(s: &str) -> bool {
 fn is_ipv4(s: &str) -> bool {
     let octets: Vec<&str> = s.split('.').collect();
     octets.len() == 4 && octets.iter().all(|x| x.parse::<u8>().is_ok())
-}
-
-pub fn expand_vars_for_host(input: &str, workspace_folder: &Path) -> String {
-    expand_vars_for_host_with_target(input, workspace_folder, "/workspace")
 }
 
 pub fn expand_vars_for_host_with_target(
@@ -1509,8 +1553,11 @@ mod tests {
     #[test]
     fn test_expand_vars_for_host_default_target() {
         let ws = std::path::Path::new("/home/user/proj");
-        let expanded =
-            expand_vars_for_host("${localWorkspaceFolder}|${containerWorkspaceFolder}", ws);
+        let expanded = expand_vars_for_host_with_target(
+            "${localWorkspaceFolder}|${containerWorkspaceFolder}",
+            ws,
+            "/workspace",
+        );
         assert_eq!(expanded, "/home/user/proj|/workspace");
     }
 

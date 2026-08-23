@@ -21,6 +21,12 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     let shutdown = cfg.shutdown_action.as_deref().unwrap_or("remove");
     let container_name = cfg.container_name(&ws);
 
+    // Never stop/remove a container that belongs to a different workspace
+    // (same-basename name collision).
+    if shutdown != "none" && docker::container_exists(&container_name)? {
+        docker::ensure_container_matches_workspace(&container_name, &ws)?;
+    }
+
     match shutdown {
         "none" => {
             println!("shutdownAction is 'none', skipping down (container kept)");

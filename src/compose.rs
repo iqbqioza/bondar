@@ -570,9 +570,14 @@ pub fn compose_exec(
             .iter()
             .map(|(k, v)| {
                 let target = workdir.unwrap_or("/");
+                let resolved = crate::docker::resolve_container_env_value(v, &config.container_env);
                 (
                     k.clone(),
-                    crate::docker::expand_vars_for_host_with_target(v, workspace_folder, target),
+                    crate::docker::expand_vars_for_host_with_target(
+                        &resolved,
+                        workspace_folder,
+                        target,
+                    ),
                 )
             })
             .collect();

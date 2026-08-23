@@ -74,6 +74,11 @@ pub fn run(
         );
     }
     let (was_existing, was_running) = docker::container_exists_and_running(&container_name)?;
+    // A same-basename workspace may have created a container with this name;
+    // never attach to, start or remove another workspace's container.
+    if was_existing {
+        docker::ensure_container_matches_workspace(&container_name, &ws)?;
+    }
 
     // Warn if another container exists for the same workspace (name collision)
     match docker::find_containers_for_workspace(&ws) {
@@ -93,7 +98,8 @@ pub fn run(
 
     if let Some(cmd) = &cfg.initialize_command {
         println!("Running initializeCommand on host...");
-        lifecycle::execute_host_lifecycle(cmd, &ws)?;
+        let host_target = cfg.workspace_folder_or_default();
+        lifecycle::execute_host_lifecycle_with_target(cmd, &ws, &host_target)?;
     }
 
     let image_name = docker::resolve_image_name(&cfg, &ws)?;
@@ -178,9 +184,10 @@ pub fn run(
         .container_env
         .iter()
         .map(|(k, v)| {
+            let resolved = crate::docker::resolve_container_env_value(v, &cfg.container_env);
             (
                 k.clone(),
-                crate::docker::expand_vars_for_host_with_target(v, &ws, &workspace_target),
+                crate::docker::expand_vars_for_host_with_target(&resolved, &ws, &workspace_target),
             )
         })
         .collect();
@@ -372,7 +379,11 @@ fn run_compose(
 
     if let Some(cmd) = &cfg.initialize_command {
         println!("Running initializeCommand on host...");
-        lifecycle::execute_host_lifecycle(cmd, ws)?;
+        let host_target = cfg
+            .workspace_folder
+            .clone()
+            .unwrap_or_else(|| "/".to_string());
+        lifecycle::execute_host_lifecycle_with_target(cmd, ws, &host_target)?;
     }
 
     if no_cache && !no_build {

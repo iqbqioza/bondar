@@ -598,6 +598,67 @@ fn test_compose_run_services_includes_primary() {
 }
 
 #[test]
+fn test_same_basename_workspace_isolation() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    // Two workspaces with the same basename must never share containers
+    let base_a = std::env::temp_dir().join("bondar-int-collide-a");
+    let base_b = std::env::temp_dir().join("bondar-int-collide-b");
+    let _ = std::fs::remove_dir_all(&base_a);
+    let _ = std::fs::remove_dir_all(&base_b);
+    std::fs::create_dir_all(&base_a).unwrap();
+    std::fs::create_dir_all(&base_b).unwrap();
+    let ws_a = base_a.join("collide");
+    let ws_b = base_b.join("collide");
+    for ws in [&ws_a, &ws_b] {
+        std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+        std::fs::write(
+            ws.join(".devcontainer/devcontainer.json"),
+            r#"{"name": "collide", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+        )
+        .unwrap();
+    }
+
+    let up_a = bondar(&["up", "--workspace-folder", ws_a.to_str().unwrap()]);
+    assert!(up_a.status.success(), "first up failed");
+
+    // up on the second workspace must refuse to touch the first one's container
+    let up_b = bondar(&["up", "--workspace-folder", ws_b.to_str().unwrap()]);
+    assert!(
+        !up_b.status.success(),
+        "second up must fail on a name collision"
+    );
+    assert!(String::from_utf8_lossy(&up_b.stderr).contains("already exists for workspace"));
+
+    // down on the second workspace must not remove the first one's container
+    let down_b = bondar(&["down", "--workspace-folder", ws_b.to_str().unwrap()]);
+    assert!(
+        !down_b.status.success(),
+        "second down must fail on a name collision"
+    );
+
+    // The first workspace's container is still there and usable
+    let exec_a = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_a.to_str().unwrap(),
+        "--",
+        "sh",
+        "-c",
+        "echo intact",
+    ]);
+    assert!(exec_a.status.success());
+    assert!(String::from_utf8_lossy(&exec_a.stdout).contains("intact"));
+
+    let down_a = bondar(&["down", "--workspace-folder", ws_a.to_str().unwrap()]);
+    assert!(down_a.status.success());
+    let _ = std::fs::remove_dir_all(&base_a);
+    let _ = std::fs::remove_dir_all(&base_b);
+}
+
+#[test]
 fn test_read_configuration_merged() {
     let ws = make_workspace(
         "merged",

@@ -31,8 +31,14 @@ pub struct ContainerExec<'a> {
     pub container_env: Option<&'a HashMap<String, String>>,
 }
 
-pub fn execute_host_lifecycle(value: &serde_json::Value, workspace_folder: &Path) -> Result<()> {
-    execute_value_with_env(value, workspace_folder, None)
+/// Host lifecycle with an explicit container workspace folder, so
+/// `${containerWorkspaceFolder}` expands to the configured value.
+pub fn execute_host_lifecycle_with_target(
+    value: &serde_json::Value,
+    workspace_folder: &Path,
+    container_workspace: &str,
+) -> Result<()> {
+    execute_value_with_env(value, workspace_folder, container_workspace, None)
 }
 
 pub fn execute_container_lifecycle_with_env(
@@ -52,17 +58,25 @@ pub fn execute_container_lifecycle_with_env(
         env,
         container_env,
     };
-    execute_value_with_env(value, workspace_folder, Some(&exec))
+    execute_value_with_env(value, workspace_folder, workdir, Some(&exec))
 }
 
 fn execute_value_with_env(
     value: &serde_json::Value,
     workspace_folder: &Path,
+    container_workspace: &str,
     container: Option<&ContainerExec<'_>>,
 ) -> Result<()> {
     match value {
         serde_json::Value::String(s) => {
-            execute_single_command_with_env(s, &[], true, workspace_folder, container)?;
+            execute_single_command_with_env(
+                s,
+                &[],
+                true,
+                workspace_folder,
+                container_workspace,
+                container,
+            )?;
         }
         serde_json::Value::Array(arr) => {
             if arr.is_empty() {
@@ -84,13 +98,20 @@ fn execute_value_with_env(
             }
             let cmd = &parts[0];
             let args: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
-            execute_single_command_with_env(cmd, &args, false, workspace_folder, container)?;
+            execute_single_command_with_env(
+                cmd,
+                &args,
+                false,
+                workspace_folder,
+                container_workspace,
+                container,
+            )?;
         }
         serde_json::Value::Object(map) => {
             // serde_json preserves declaration order (preserve_order feature)
             for (key, cmd_val) in map {
                 println!("Running lifecycle '{key}'...");
-                execute_value_with_env(cmd_val, workspace_folder, container)?;
+                execute_value_with_env(cmd_val, workspace_folder, container_workspace, container)?;
             }
         }
         serde_json::Value::Null => {}
@@ -108,12 +129,13 @@ fn execute_single_command_with_env(
     args: &[&str],
     use_shell: bool,
     workspace_folder: &Path,
+    container_workspace: &str,
     container: Option<&ContainerExec<'_>>,
 ) -> Result<()> {
     if let Some(exec) = container {
         execute_in_container_with_env(cmd, args, use_shell, exec)
     } else {
-        execute_on_host(cmd, args, use_shell, workspace_folder)
+        execute_on_host(cmd, args, use_shell, workspace_folder, container_workspace)
     }
 }
 
@@ -122,11 +144,19 @@ fn execute_on_host(
     args: &[&str],
     use_shell: bool,
     workspace_folder: &Path,
+    container_workspace: &str,
 ) -> Result<()> {
-    let expanded_cmd = crate::docker::expand_vars_for_host(cmd, workspace_folder);
+    let expanded_cmd =
+        crate::docker::expand_vars_for_host_with_target(cmd, workspace_folder, container_workspace);
     let expanded_args: Vec<String> = args
         .iter()
-        .map(|a| crate::docker::expand_vars_for_host(a, workspace_folder))
+        .map(|a| {
+            crate::docker::expand_vars_for_host_with_target(
+                a,
+                workspace_folder,
+                container_workspace,
+            )
+        })
         .collect();
 
     println!(
@@ -446,9 +476,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
         std::fs::create_dir_all(&ws).unwrap();
 
-        assert!(execute_host_lifecycle(&json!("echo hello"), &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(&json!("echo hello"), &ws, "/workspace").is_ok()
+        );
         // Failure propagates
-        assert!(execute_host_lifecycle(&json!("exit 1"), &ws).is_err());
+        assert!(execute_host_lifecycle_with_target(&json!("exit 1"), &ws, "/workspace").is_err());
 
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -460,17 +492,35 @@ mod tests {
         std::fs::create_dir_all(&ws).unwrap();
 
         // Array
-        assert!(execute_host_lifecycle(&json!(["echo", "hi"]), &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(&json!(["echo", "hi"]), &ws, "/workspace").is_ok()
+        );
         // Empty array
-        assert!(execute_host_lifecycle(&serde_json::json!([]), &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(&serde_json::json!([]), &ws, "/workspace").is_ok()
+        );
         // Object (sequential keys)
-        assert!(execute_host_lifecycle(&json!({"a": "echo a", "b": ["echo", "b"]}), &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(
+                &json!({"a": "echo a", "b": ["echo", "b"]}),
+                &ws,
+                "/workspace"
+            )
+            .is_ok()
+        );
         // Null
-        assert!(execute_host_lifecycle(&serde_json::Value::Null, &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(&serde_json::Value::Null, &ws, "/workspace").is_ok()
+        );
         // Invalid type
-        assert!(execute_host_lifecycle(&serde_json::json!(123), &ws).is_err());
+        assert!(
+            execute_host_lifecycle_with_target(&serde_json::json!(123), &ws, "/workspace").is_err()
+        );
         // Non-string array elements
-        assert!(execute_host_lifecycle(&serde_json::json!([123, 456]), &ws).is_err());
+        assert!(
+            execute_host_lifecycle_with_target(&serde_json::json!([123, 456]), &ws, "/workspace")
+                .is_err()
+        );
 
         let _ = std::fs::remove_dir_all(&ws);
     }
