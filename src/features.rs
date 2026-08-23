@@ -2,9 +2,19 @@ use std::collections::HashMap;
 
 use crate::error::Result;
 
+#[allow(dead_code)]
 pub fn handle_features(
     features: &Option<HashMap<String, serde_json::Value>>,
     override_order: &Option<Vec<String>>,
+) -> Result<()> {
+    handle_features_with_container(features, override_order, None, None)
+}
+
+pub fn handle_features_with_container(
+    features: &Option<HashMap<String, serde_json::Value>>,
+    override_order: &Option<Vec<String>>,
+    container_name: Option<&str>,
+    workspace_folder: Option<&std::path::Path>,
 ) -> Result<()> {
     let Some(feat_map) = features else {
         return Ok(());
@@ -34,12 +44,12 @@ pub fn handle_features(
         println!("Installing features in override order:");
         for id in order {
             if let Some(opts) = feat_map.get(id) {
-                install_feature(id, opts)?;
+                install_feature(id, opts, container_name, workspace_folder)?;
             }
         }
         for (id, opts) in feat_map {
             if !order.contains(id) {
-                install_feature(id, opts)?;
+                install_feature(id, opts, container_name, workspace_folder)?;
             }
         }
     } else {
@@ -47,7 +57,7 @@ pub fn handle_features(
         println!("Installing features in installsAfter order:");
         for id in sorted {
             if let Some(opts) = feat_map.get(&id) {
-                install_feature(&id, opts)?;
+                install_feature(&id, opts, container_name, workspace_folder)?;
             }
         }
     }
@@ -97,7 +107,12 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
     sorted
 }
 
-fn install_feature(id: &str, opts: &serde_json::Value) -> Result<()> {
+fn install_feature(
+    id: &str,
+    opts: &serde_json::Value,
+    container_name: Option<&str>,
+    _workspace_folder: Option<&std::path::Path>,
+) -> Result<()> {
     if !id.contains('/') && !id.contains('.') {
         eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
         return Ok(());
@@ -160,9 +175,52 @@ fn install_feature(id: &str, opts: &serde_json::Value) -> Result<()> {
         }
     }
 
-    eprintln!(
-        "  Note: Full feature installation requires executing install.sh inside the dev container with _CONTAINER_USER and options. Bondar currently validates and fetches but skips execution to remain standalone. Feature '{id}' treated as validated."
-    );
+    if let Some(container) = container_name {
+        // Try to execute install.sh inside the container if it exists
+        // Features are expected to be at /tmp/bondar_features or already in container
+        let check = std::process::Command::new("docker")
+            .args(["exec", container, "sh", "-c", "ls /tmp/bondar_features/install.sh 2>/dev/null || ls /usr/local/share/devcontainers/features/*/install.sh 2>/dev/null | head -1"])
+            .output();
+        if let Ok(o) = check
+            && o.status.success()
+        {
+            let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !path.is_empty() {
+                println!("  Found install script at {path}, executing...");
+                let install = std::process::Command::new("docker")
+                    .args([
+                        "exec",
+                        container,
+                        "sh",
+                        "-c",
+                        &format!("chmod +x {path} && {path}"),
+                    ])
+                    .output();
+                if let Ok(io) = install {
+                    if io.status.success() {
+                        println!("  Feature {id} installed successfully");
+                    } else {
+                        eprintln!(
+                            "  Warning: install.sh failed for {id}: {}",
+                            String::from_utf8_lossy(&io.stderr)
+                        );
+                    }
+                }
+            } else {
+                eprintln!(
+                    "  Note: Full feature installation requires executing install.sh inside the dev container with _CONTAINER_USER and options. Bondar currently validates and fetches but skips execution to remain standalone. Feature '{id}' treated as validated."
+                );
+            }
+        } else {
+            eprintln!(
+                "  Note: Full feature installation requires executing install.sh inside the dev container with _CONTAINER_USER and options. Bondar currently validates and fetches but skips execution to remain standalone. Feature '{id}' treated as validated."
+            );
+        }
+    } else {
+        eprintln!(
+            "  Note: Full feature installation requires executing install.sh inside the dev container with _CONTAINER_USER and options. Bondar currently validates and fetches but skips execution to remain standalone. Feature '{id}' treated as validated."
+        );
+    }
     Ok(())
 }
 

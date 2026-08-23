@@ -23,8 +23,6 @@ pub fn run(
         println!("Detected lifecycle: {}", summary.join(", "));
     }
 
-    crate::features::handle_features(&cfg.features, &cfg.override_feature_install_order)?;
-
     if let Some(probe) = &cfg.user_env_probe {
         match probe.as_str() {
             "none" => {}
@@ -85,6 +83,13 @@ pub fn run(
     )?;
 
     host::handle_update_remote_user_uid(&cfg, &container_name)?;
+
+    crate::features::handle_features_with_container(
+        &cfg.features,
+        &cfg.override_feature_install_order,
+        Some(&container_name),
+        Some(&ws),
+    )?;
 
     let probed_env = if let Some(probe) = &cfg.user_env_probe
         && probe != "none"
@@ -243,6 +248,13 @@ fn run_compose(
         .unwrap_or_else(|_| service.to_string());
 
     host::handle_update_remote_user_uid(cfg, &container_name).ok();
+    crate::features::handle_features_with_container(
+        &cfg.features,
+        &cfg.override_feature_install_order,
+        Some(&container_name),
+        Some(ws),
+    )
+    .ok();
 
     let workspace_target = cfg
         .workspace_folder
