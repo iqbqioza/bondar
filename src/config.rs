@@ -261,6 +261,32 @@ impl DevContainerConfig {
                 "'workspaceFolder' must not be empty".to_string(),
             ));
         }
+        if let Some(f) = &self.workspace_folder
+            && !f.starts_with('/')
+        {
+            return Err(BondarError::Config(
+                "'workspaceFolder' must be an absolute path inside the container".to_string(),
+            ));
+        }
+        for m in &self.mounts {
+            match m {
+                MountValue::String(s) if s.trim().is_empty() => {
+                    return Err(BondarError::Config(
+                        "'mounts' entries must not be empty".to_string(),
+                    ));
+                }
+                MountValue::Object(o) => {
+                    if let Some(t) = &o.target
+                        && t.trim().is_empty()
+                    {
+                        return Err(BondarError::Config(
+                            "'mounts' target must not be empty".to_string(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
         if let Some(f) = &self.docker_compose_file {
             let empty = match f {
                 ComposeFileValue::Single(s) => s.trim().is_empty(),
@@ -287,6 +313,11 @@ impl DevContainerConfig {
                     "'containerEnv'/'remoteEnv' keys must not be empty".to_string(),
                 ));
             }
+            if key.contains('=') {
+                return Err(BondarError::Config(format!(
+                    "'containerEnv'/'remoteEnv' key '{key}' must not contain '='"
+                )));
+            }
         }
         if let Some(feats) = &self.features {
             for id in feats.keys() {
@@ -303,6 +334,11 @@ impl DevContainerConfig {
                     return Err(BondarError::Config(
                         "'secrets' keys must not be empty".to_string(),
                     ));
+                }
+                if key.contains('=') {
+                    return Err(BondarError::Config(format!(
+                        "'secrets' key '{key}' must not contain '='"
+                    )));
                 }
             }
         }
@@ -655,6 +691,48 @@ mod tests {
         let cfg2: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "remoteEnv": {"": "value"}}"#).unwrap();
         assert!(cfg2.validate().is_err());
+
+        // Keys must not contain '='
+        let eq: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "containerEnv": {"A=B": "v"}}"#).unwrap();
+        assert!(eq.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_workspace_folder_absolute() {
+        let rel: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "workspaceFolder": "relative"}"#).unwrap();
+        assert!(rel.validate().is_err());
+
+        let abs: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "workspaceFolder": "/ws"}"#).unwrap();
+        assert!(abs.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_mounts_not_empty() {
+        let empty_mount: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "mounts": [""]}"#).unwrap();
+        assert!(empty_mount.validate().is_err());
+
+        let empty_target: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"type": "bind", "target": ""}]}"#,
+        )
+        .unwrap();
+        assert!(empty_target.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_secrets_keys() {
+        let eq: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"A=B": {"localEnv": "X"}}}"#)
+                .unwrap();
+        assert!(eq.validate().is_err());
+
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"SEC": {"localEnv": "X"}}}"#)
+                .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]

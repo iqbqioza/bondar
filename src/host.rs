@@ -19,7 +19,11 @@ pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path
         }
     }
 
-    if let Some(mem_str) = req.get("memory").and_then(|v| v.as_str()) {
+    if let Some(mem) = req.get("memory") {
+        let Some(mem_str) = mem.as_str() else {
+            eprintln!("Warning: hostRequirements.memory must be a string, got {mem}");
+            return Ok(());
+        };
         if let Some(required_bytes) = parse_size(mem_str) {
             if let Some(available_bytes) = available_memory_bytes()
                 && available_bytes < required_bytes
@@ -34,7 +38,11 @@ pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path
         }
     }
 
-    if let Some(storage_str) = req.get("storage").and_then(|v| v.as_str()) {
+    if let Some(storage) = req.get("storage") {
+        let Some(storage_str) = storage.as_str() else {
+            eprintln!("Warning: hostRequirements.storage must be a string, got {storage}");
+            return Ok(());
+        };
         if let Some(required_bytes) = parse_size(storage_str) {
             if let Some(available_bytes) = available_storage_bytes(_workspace_folder)
                 && available_bytes < required_bytes

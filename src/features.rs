@@ -299,7 +299,11 @@ fn ensure_extracted(dest_dir: &Path) {
         let Some(name) = entry.file_name().to_str().map(String::from) else {
             continue;
         };
-        if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".tar") {
+        let lower_name = name.to_lowercase();
+        if lower_name.ends_with(".tar.gz")
+            || lower_name.ends_with(".tgz")
+            || lower_name.ends_with(".tar")
+        {
             // Guard against path traversal / absolute paths in the archive
             if let Ok(list) = std::process::Command::new("tar")
                 .arg("-tf")

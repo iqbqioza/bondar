@@ -175,7 +175,13 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                     &container_target,
                 );
                 if let Some(vol) = mount_string_to_compose_volume(&expanded) {
-                    volumes.push(vol);
+                    if volumes.contains(&vol) {
+                        eprintln!(
+                            "Warning: mount '{vol}' is declared more than once; keeping the first entry"
+                        );
+                    } else {
+                        volumes.push(vol);
+                    }
                 }
             }
             MountValue::Object(obj) => {
@@ -206,7 +212,13 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                     if obj.readonly.unwrap_or(false) {
                         vol.push_str(":ro");
                     }
-                    volumes.push(vol);
+                    if volumes.contains(&vol) {
+                        eprintln!(
+                            "Warning: mount '{vol}' is declared more than once; keeping the first entry"
+                        );
+                    } else {
+                        volumes.push(vol);
+                    }
                 }
             }
         }
@@ -225,7 +237,7 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         expanded_env.insert(k.clone(), expanded);
     }
     for (k, v) in &config.container_env {
-        let from_map = crate::docker::expand_container_env_from_map(v, &expanded_env);
+        let from_map = crate::docker::expand_container_env_from_map(v, &expanded_env, Some(k));
         let resolved = crate::docker::expand_vars_for_host_with_target(
             &from_map,
             workspace_folder,
@@ -506,10 +518,27 @@ pub fn compose_exec(
         cmd.arg("-w").arg(w);
     }
     if let Some(env_map) = env {
+        // Resolve ${containerEnv:KEY} references against the containerEnv map
+        let container_env_map: std::collections::HashMap<String, String> = config
+            .container_env
+            .iter()
+            .map(|(k, v)| {
+                let target = workdir.unwrap_or("/");
+                (
+                    k.clone(),
+                    crate::docker::expand_vars_for_host_with_target(v, workspace_folder, target),
+                )
+            })
+            .collect();
         for (k, v) in env_map {
             let target = workdir.unwrap_or("/");
-            let expanded =
-                crate::docker::expand_vars_for_host_with_target(v, workspace_folder, target);
+            let from_map =
+                crate::docker::expand_container_env_from_map(v, &container_env_map, None);
+            let expanded = crate::docker::expand_vars_for_host_with_target(
+                &from_map,
+                workspace_folder,
+                target,
+            );
             cmd.arg("-e").arg(format!("{k}={expanded}"));
         }
     }

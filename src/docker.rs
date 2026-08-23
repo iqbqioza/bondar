@@ -402,6 +402,14 @@ pub fn create_and_start_container(
 
     // Additional mounts
     for m in &config.mounts {
+        if let MountValue::Object(obj) = m
+            && let Some(t) = &obj.target
+            && t == &workspace_target
+        {
+            eprintln!(
+                "Warning: mount target '{t}' duplicates the workspace mount; docker may reject it"
+            );
+        }
         match m {
             MountValue::String(s) => {
                 let expanded =
@@ -444,7 +452,7 @@ pub fn create_and_start_container(
     // Pass 2: resolve ${containerEnv:KEY} from the original values against the
     // expanded map, then apply generic expansion to the substituted result
     for (k, v) in &config.container_env {
-        let from_map = expand_container_env_from_map(v, &expanded_env);
+        let from_map = expand_container_env_from_map(v, &expanded_env, Some(k));
         let resolved =
             expand_vars_for_host_with_target(&from_map, workspace_folder, &workspace_target);
         cmd.arg("-e").arg(format!("{k}={resolved}"));
@@ -453,10 +461,16 @@ pub fn create_and_start_container(
     // Secrets resolved from local env (devcontainer spec: { "MY_SECRET": { "localEnv": "VAR" } })
     let resolved_secrets = resolve_secrets(config);
     for (k, v) in &resolved_secrets {
+        if config.container_env.contains_key(k) {
+            eprintln!(
+                "Warning: secret key '{k}' conflicts with an existing environment entry and will override it"
+            );
+        }
         cmd.arg("-e").arg(format!("{k}={v}"));
     }
 
     // Publish / forward ports
+    let mut published: Vec<String> = Vec::new();
     for port in &config.forward_ports {
         let port_str = match port {
             crate::config::ForwardPort::Number(n) => n.to_string(),
@@ -470,6 +484,12 @@ pub fn create_and_start_container(
             if is_udp_port(config, &port_str) && !publish.ends_with("/udp") {
                 publish.push_str("/udp");
             }
+            if published.contains(&publish) {
+                eprintln!(
+                    "Warning: port '{publish}' is published more than once; docker will bind it repeatedly"
+                );
+            }
+            published.push(publish.clone());
             cmd.arg("-p").arg(publish);
         } else {
             eprintln!(
@@ -494,6 +514,12 @@ pub fn create_and_start_container(
                 if is_udp_port(config, &p) && !publish.ends_with("/udp") {
                     publish.push_str("/udp");
                 }
+                if published.contains(&publish) {
+                    eprintln!(
+                        "Warning: port '{publish}' is published more than once; docker will bind it repeatedly"
+                    );
+                }
+                published.push(publish.clone());
                 cmd.arg("-p").arg(publish);
             } else {
                 eprintln!(
@@ -774,10 +800,18 @@ fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
 
 /// Resolve `${containerEnv:KEY}` references against a host-side map (e.g. the
 /// already-processed `containerEnv` entries). Unmatched keys fall through to
-/// the generic (host-based) `expand_container_env_vars`.
-pub fn expand_container_env_from_map(input: &str, env_map: &HashMap<String, String>) -> String {
+/// the generic (host-based) `expand_container_env_vars`. Pass `skip` to avoid
+/// self-references (a key resolving against its own value).
+pub fn expand_container_env_from_map(
+    input: &str,
+    env_map: &HashMap<String, String>,
+    skip: Option<&str>,
+) -> String {
     let mut result = input.to_string();
     for (k, v) in env_map {
+        if skip == Some(k.as_str()) {
+            continue;
+        }
         result = result.replace(&format!("${{containerEnv:{k}}}"), v);
     }
     result
@@ -925,6 +959,7 @@ pub fn exec_in_container(
     command: &[String],
     env: Option<&HashMap<String, String>>,
     workspace_folder: Option<&Path>,
+    container_env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     if !container_running(container_name)? {
         return Err(BondarError::Docker(format!(
@@ -950,11 +985,18 @@ pub fn exec_in_container(
 
     if let Some(env_map) = env {
         for (k, v) in env_map {
-            let expanded_v = if let Some(ws) = workspace_folder {
-                let target = workdir.unwrap_or("/workspace");
-                expand_vars_for_host_with_target(v, ws, target)
+            // Resolve ${containerEnv:KEY} references from the original value
+            // against the containerEnv map before generic expansion
+            let from_map = if let Some(ce) = container_env {
+                expand_container_env_from_map(v, ce, None)
             } else {
                 v.clone()
+            };
+            let expanded_v = if let Some(ws) = workspace_folder {
+                let target = workdir.unwrap_or("/workspace");
+                expand_vars_for_host_with_target(&from_map, ws, target)
+            } else {
+                from_map
             };
             cmd.arg("-e").arg(format!("{k}={expanded_v}"));
         }
@@ -1196,12 +1238,12 @@ mod tests {
     fn test_expand_container_env_from_map() {
         let map = HashMap::from([("A".to_string(), "x".to_string())]);
         assert_eq!(
-            expand_container_env_from_map("${containerEnv:A}-y", &map),
+            expand_container_env_from_map("${containerEnv:A}-y", &map, None),
             "x-y"
         );
         // Unmatched keys fall through untouched (resolved later from host)
         assert_eq!(
-            expand_container_env_from_map("${containerEnv:UNSET:fb}", &map),
+            expand_container_env_from_map("${containerEnv:UNSET:fb}", &map, None),
             "${containerEnv:UNSET:fb}"
         );
     }

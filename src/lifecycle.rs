@@ -28,6 +28,7 @@ pub struct ContainerExec<'a> {
     pub workdir: &'a str,
     pub workspace_folder: &'a Path,
     pub env: Option<&'a HashMap<String, String>>,
+    pub container_env: Option<&'a HashMap<String, String>>,
 }
 
 pub fn execute_host_lifecycle(value: &serde_json::Value, workspace_folder: &Path) -> Result<()> {
@@ -41,6 +42,7 @@ pub fn execute_container_lifecycle_with_env(
     workdir: &str,
     workspace_folder: &Path,
     env: Option<&HashMap<String, String>>,
+    container_env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     let exec = ContainerExec {
         container_name,
@@ -48,6 +50,7 @@ pub fn execute_container_lifecycle_with_env(
         workdir,
         workspace_folder,
         env,
+        container_env,
     };
     execute_value_with_env(value, workspace_folder, Some(&exec), None)
 }
@@ -194,6 +197,7 @@ pub fn spawn_container_lifecycle(
     workdir: &str,
     workspace_folder: &Path,
     env: Option<&HashMap<String, String>>,
+    container_env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     let exec = ContainerExec {
         container_name,
@@ -201,6 +205,7 @@ pub fn spawn_container_lifecycle(
         workdir,
         workspace_folder,
         env,
+        container_env,
     };
     spawn_container_value(value, &exec)
 }
@@ -292,8 +297,17 @@ fn build_container_command(
 
     if let Some(env_map) = exec.env {
         for (k, v) in env_map {
-            let expanded_v =
-                crate::docker::expand_vars_for_container(v, exec.workspace_folder, exec.workdir);
+            // Resolve ${containerEnv:KEY} references against the containerEnv map
+            let from_map = if let Some(ce) = exec.container_env {
+                crate::docker::expand_container_env_from_map(v, ce, None)
+            } else {
+                v.clone()
+            };
+            let expanded_v = crate::docker::expand_vars_for_container(
+                &from_map,
+                exec.workspace_folder,
+                exec.workdir,
+            );
             docker_cmd.arg("-e").arg(format!("{k}={expanded_v}"));
         }
     }

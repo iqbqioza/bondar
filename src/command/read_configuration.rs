@@ -201,8 +201,13 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
             )
         })
         .collect();
-    for (k, v) in &cfg.container_env {
-        let from_map = docker::expand_container_env_from_map(v, &container_env_map);
+    for (k, v) in cfg.container_env.iter().chain(cfg.remote_env.iter()) {
+        let skip = if cfg.container_env.contains_key(k) {
+            Some(k.as_str())
+        } else {
+            None
+        };
+        let from_map = docker::expand_container_env_from_map(v, &container_env_map, skip);
         let resolved = docker::expand_vars_for_host_with_target(&from_map, ws, &target);
         env.insert(k.clone(), Value::String(resolved));
     }
@@ -235,7 +240,38 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
                 .collect::<Vec<_>>()
         ),
     );
-    merged.insert("mounts".into(), json!(cfg.mounts));
+    let expanded_mounts: Vec<Value> = cfg
+        .mounts
+        .iter()
+        .map(|m| match m {
+            config::MountValue::String(s) => {
+                Value::String(docker::expand_vars_for_host_with_target(s, ws, &target))
+            }
+            config::MountValue::Object(o) => {
+                let mut obj = serde_json::Map::new();
+                if let Some(s) = &o.source {
+                    obj.insert(
+                        "source".into(),
+                        Value::String(docker::expand_vars_for_host_with_target(s, ws, &target)),
+                    );
+                }
+                if let Some(t) = &o.target {
+                    obj.insert(
+                        "target".into(),
+                        Value::String(docker::expand_vars_for_host_with_target(t, ws, &target)),
+                    );
+                }
+                if let Some(t) = &o.mount_type {
+                    obj.insert("type".into(), Value::String(t.clone()));
+                }
+                if let Some(r) = o.readonly {
+                    obj.insert("readonly".into(), Value::Bool(r));
+                }
+                Value::Object(obj)
+            }
+        })
+        .collect();
+    merged.insert("mounts".into(), Value::Array(expanded_mounts));
     merged.insert("features".into(), json!(cfg.features));
     merged.insert("runServices".into(), json!(cfg.run_services));
     merged.insert("shutdownAction".into(), json!(cfg.shutdown_action));

@@ -47,6 +47,17 @@ pub fn run(
         .or(cfg.workspace_folder.clone());
 
     let env = merged_exec_env(&cfg, &container_name, exec_user.as_deref());
+    let container_env_map: std::collections::HashMap<String, String> = cfg
+        .container_env
+        .iter()
+        .map(|(k, v)| {
+            let target = exec_workdir.as_deref().unwrap_or("/workspace");
+            (
+                k.clone(),
+                docker::expand_vars_for_host_with_target(v, &ws, target),
+            )
+        })
+        .collect();
     docker::exec_in_container(
         &container_name,
         exec_user.as_deref(),
@@ -54,6 +65,7 @@ pub fn run(
         &command,
         env.as_ref(),
         Some(&ws),
+        Some(&container_env_map),
     )?;
 
     Ok(())

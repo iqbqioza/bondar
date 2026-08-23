@@ -47,6 +47,17 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     ];
 
     let env = crate::command::exec::merged_exec_env(&cfg, &container_name, user.as_deref());
+    let container_env_map: std::collections::HashMap<String, String> = cfg
+        .container_env
+        .iter()
+        .map(|(k, v)| {
+            let target = workdir.as_deref().unwrap_or("/workspace");
+            (
+                k.clone(),
+                crate::docker::expand_vars_for_host_with_target(v, &ws, target),
+            )
+        })
+        .collect();
     docker::exec_in_container(
         &container_name,
         user.as_deref(),
@@ -54,6 +65,7 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         &shell_cmd,
         env.as_ref(),
         Some(&ws),
+        Some(&container_env_map),
     )?;
 
     Ok(())

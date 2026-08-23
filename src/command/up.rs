@@ -24,6 +24,10 @@ pub fn run(
     let ws = docker::get_workspace_folder(workspace_folder)?;
     let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
+    if no_build && cfg.build.is_none() {
+        eprintln!("Warning: --no-build has no effect (no 'build' section configured)");
+    }
+
     let summary = lifecycle::lifecycle_summary(&cfg);
     if !summary.is_empty() {
         println!("Detected lifecycle: {}", summary.join(", "));
@@ -158,6 +162,16 @@ pub fn run(
 
     let workspace_target = cfg.workspace_folder_or_default();
     let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
+    let container_env_map: std::collections::HashMap<String, String> = cfg
+        .container_env
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                crate::docker::expand_vars_for_host_with_target(v, &ws, &workspace_target),
+            )
+        })
+        .collect();
     let lifecycle_env = {
         let mut merged = cfg.remote_env.clone();
         if let Some(probed) = &probed_env {
@@ -186,6 +200,7 @@ pub fn run(
                 &workspace_target,
                 &ws,
                 lifecycle_env.as_ref(),
+                &container_env_map,
             )?;
         }
         if let Some(cmd) = &cfg.update_content_command {
@@ -199,6 +214,7 @@ pub fn run(
                 &workspace_target,
                 &ws,
                 lifecycle_env.as_ref(),
+                &container_env_map,
             )?;
         }
         if let Some(cmd) = &cfg.post_create_command {
@@ -212,6 +228,7 @@ pub fn run(
                 &workspace_target,
                 &ws,
                 lifecycle_env.as_ref(),
+                &container_env_map,
             )?;
         }
     }
@@ -228,6 +245,7 @@ pub fn run(
             &workspace_target,
             &ws,
             lifecycle_env.as_ref(),
+            &container_env_map,
         )?;
     }
 
@@ -242,6 +260,7 @@ pub fn run(
             &workspace_target,
             &ws,
             lifecycle_env.as_ref(),
+            &container_env_map,
         )?;
     }
 
@@ -294,6 +313,7 @@ fn run_lifecycle_step(
     workspace_target: &str,
     ws: &std::path::Path,
     lifecycle_env: Option<&std::collections::HashMap<String, String>>,
+    container_env_map: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
     if step_idx > wait_idx {
         println!("Running {name} in background (waitFor)...");
@@ -304,6 +324,7 @@ fn run_lifecycle_step(
             workspace_target,
             ws,
             lifecycle_env,
+            Some(container_env_map),
         )
     } else {
         println!("Running {name}...");
@@ -314,6 +335,7 @@ fn run_lifecycle_step(
             workspace_target,
             ws,
             lifecycle_env,
+            Some(container_env_map),
         )
     }
 }
@@ -393,6 +415,16 @@ fn run_compose(
         .clone()
         .unwrap_or_else(|| "/".to_string());
     let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
+    let container_env_map: std::collections::HashMap<String, String> = cfg
+        .container_env
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                crate::docker::expand_vars_for_host_with_target(v, ws, &workspace_target),
+            )
+        })
+        .collect();
 
     let probed_env = if let Some(probe) = &cfg.user_env_probe
         && probe != "none"
@@ -430,6 +462,7 @@ fn run_compose(
                 &workspace_target,
                 ws,
                 lifecycle_env.as_ref(),
+                &container_env_map,
             )?;
         }
         if let Some(cmd) = &cfg.update_content_command {
@@ -443,6 +476,7 @@ fn run_compose(
                 &workspace_target,
                 ws,
                 lifecycle_env.as_ref(),
+                &container_env_map,
             )?;
         }
         if let Some(cmd) = &cfg.post_create_command {
@@ -456,6 +490,7 @@ fn run_compose(
                 &workspace_target,
                 ws,
                 lifecycle_env.as_ref(),
+                &container_env_map,
             )?;
         }
     }
@@ -473,6 +508,7 @@ fn run_compose(
             &workspace_target,
             ws,
             lifecycle_env.as_ref(),
+            &container_env_map,
         )?;
     }
 
@@ -487,6 +523,7 @@ fn run_compose(
             &workspace_target,
             ws,
             lifecycle_env.as_ref(),
+            &container_env_map,
         )?;
     }
 
