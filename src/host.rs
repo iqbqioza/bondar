@@ -174,10 +174,13 @@ fn parse_size(s: &str) -> Option<u64> {
 }
 
 fn format_bytes(bytes: u64) -> String {
+    const TB: u64 = 1024 * 1024 * 1024 * 1024;
     const GB: u64 = 1024 * 1024 * 1024;
     const MB: u64 = 1024 * 1024;
     const KB: u64 = 1024;
-    if bytes >= GB {
+    if bytes >= TB {
+        format!("{:.1}tb", bytes as f64 / TB as f64)
+    } else if bytes >= GB {
         format!("{:.1}gb", bytes as f64 / GB as f64)
     } else if bytes >= MB {
         format!("{:.1}mb", bytes as f64 / MB as f64)
@@ -546,6 +549,7 @@ mod tests {
         assert_eq!(format_bytes(1024), "1.0kb");
         assert_eq!(format_bytes(1024 * 1024), "1.0mb");
         assert_eq!(format_bytes(5 * 1024 * 1024 * 1024), "5.0gb");
+        assert_eq!(format_bytes(2 * 1024u64.pow(4)), "2.0tb");
     }
 
     #[test]
@@ -572,5 +576,11 @@ mod tests {
         assert_eq!(parse_id_output("", "uid="), None);
         assert_eq!(parse_id_output("uid=", "uid="), None);
         assert_eq!(parse_id_output("gid=123", "uid="), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_get_host_uid() {
+        assert!(get_host_uid() > 0);
     }
 }

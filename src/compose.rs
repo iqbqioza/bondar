@@ -625,6 +625,18 @@ mod tests {
     }
 
     #[test]
+    fn test_port_value_to_string() {
+        assert_eq!(
+            port_value_to_string(&crate::config::PortValue::Number(8080)),
+            "8080"
+        );
+        assert_eq!(
+            port_value_to_string(&crate::config::PortValue::Text("3000:3001".to_string())),
+            "3000:3001"
+        );
+    }
+
+    #[test]
     fn test_write_compose_override_ports_and_volumes() {
         let dir = std::env::temp_dir().join("bondar-ovr-test3");
         let _ = std::fs::remove_dir_all(&dir);
@@ -731,6 +743,30 @@ mod tests {
         // ${localWorkspaceFolder} expands to the workspace root
         assert!(args[1].ends_with("docker-compose.yml"));
         assert!(args[1].starts_with(&dir.to_string_lossy().to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_compose_files_args_multiple() {
+        let dir = std::env::temp_dir().join("bondar-compose-multi");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        std::fs::write(dir.join("a.yml"), "services: {}").unwrap();
+        std::fs::write(dir.join("b.yml"), "services: {}").unwrap();
+        let cfg = DevContainerConfig {
+            docker_compose_file: Some(ComposeFileValue::Multiple(vec![
+                "a.yml".to_string(),
+                "b.yml".to_string(),
+            ])),
+            ..Default::default()
+        };
+        let cfg_path = dir.join(".devcontainer/devcontainer.json");
+        let args = compose_files_args(&cfg, &cfg_path, &dir).unwrap();
+        assert_eq!(args.len(), 4);
+        assert_eq!(args[0], "-f");
+        assert!(args[1].ends_with("a.yml"));
+        assert_eq!(args[2], "-f");
+        assert!(args[3].ends_with("b.yml"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

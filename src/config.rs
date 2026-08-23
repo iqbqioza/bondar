@@ -647,12 +647,48 @@ mod tests {
     }
 
     #[test]
+    fn test_workspace_folder_or_default() {
+        let cfg = DevContainerConfig::default();
+        assert_eq!(cfg.workspace_folder_or_default(), "/workspace");
+
+        let cfg2 = DevContainerConfig {
+            workspace_folder: Some("/myws".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg2.workspace_folder_or_default(), "/myws");
+    }
+
+    #[test]
+    fn test_load_config_rejects_invalid() {
+        let dir = std::env::temp_dir().join("bondar-load-invalid");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        // image + build conflict is caught by validate()
+        std::fs::write(
+            dir.join(".devcontainer/devcontainer.json"),
+            r#"{"image": "ubuntu", "build": {"dockerfile": "Dockerfile"}}"#,
+        )
+        .unwrap();
+        assert!(load_config(&dir, None).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_container_name_uppercase() {
         let cfg = DevContainerConfig {
             name: Some("MyProject".to_string()),
             ..Default::default()
         };
         assert_eq!(cfg.container_name(Path::new("/tmp/x")), "bondar-MyProject");
+    }
+
+    #[test]
+    fn test_container_name_symbols() {
+        let cfg = DevContainerConfig {
+            name: Some("My!Dev".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.container_name(Path::new("/tmp/x")), "bondar-My-Dev");
     }
 
     #[test]

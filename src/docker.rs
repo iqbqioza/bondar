@@ -629,7 +629,7 @@ fn is_port_or_range(s: &str) -> bool {
 
 fn is_ipv4(s: &str) -> bool {
     let octets: Vec<&str> = s.split('.').collect();
-    octets.len() == 4 && octets.iter().all(|x| x.parse::<u16>().is_ok())
+    octets.len() == 4 && octets.iter().all(|x| x.parse::<u8>().is_ok())
 }
 
 pub fn expand_vars_for_host(input: &str, workspace_folder: &Path) -> String {
@@ -978,6 +978,14 @@ mod tests {
     }
 
     #[test]
+    fn test_is_ipv4_octet_range() {
+        // Octets must be 0-255
+        assert!(!is_ipv4("999.999.999.999"));
+        assert!(!is_ipv4("256.0.0.1"));
+        assert!(is_ipv4("255.255.255.255"));
+    }
+
+    #[test]
     fn test_publish_port_arg_range() {
         assert_eq!(
             publish_port_arg("8080-8085"),
@@ -1225,5 +1233,28 @@ mod tests {
             publish_port_arg("8080/udp"),
             Some("8080:8080/udp".to_string())
         );
+    }
+
+    #[test]
+    fn test_port_value_to_string() {
+        assert_eq!(
+            port_value_to_string(&crate::config::PortValue::Number(8080)),
+            "8080"
+        );
+        assert_eq!(
+            port_value_to_string(&crate::config::PortValue::Text("db:5432".to_string())),
+            "db:5432"
+        );
+    }
+
+    #[test]
+    fn test_expand_vars_for_container() {
+        let ws = std::path::Path::new("/home/user/proj");
+        let expanded = expand_vars_for_container(
+            "${localWorkspaceFolder}|${localWorkspaceFolderBasename}|${containerWorkspaceFolder}|${containerWorkspaceFolderBasename}",
+            ws,
+            "/myws",
+        );
+        assert_eq!(expanded, "/home/user/proj|proj|/myws|myws");
     }
 }

@@ -36,3 +36,31 @@ impl From<serde_json::Error> for BondarError {
 }
 
 pub type Result<T> = std::result::Result<T, BondarError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display() {
+        assert_eq!(
+            BondarError::Config("bad".to_string()).to_string(),
+            "Config error: bad"
+        );
+        assert_eq!(
+            BondarError::NotFound("x".to_string()).to_string(),
+            "Not found: x"
+        );
+        assert_eq!(
+            BondarError::Docker("d".to_string()).to_string(),
+            "Docker error: d"
+        );
+    }
+
+    #[test]
+    fn test_error_from_json() {
+        let err: serde_json::Error = serde_json::from_str::<i32>("abc").unwrap_err();
+        let bondar: BondarError = err.into();
+        assert!(matches!(bondar, BondarError::Json(_)));
+    }
+}

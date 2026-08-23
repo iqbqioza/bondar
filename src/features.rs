@@ -584,6 +584,10 @@ mod tests {
         std::fs::create_dir_all(&dir3).unwrap();
         assert!(read_feature_metadata(&dir3).is_none());
 
+        // Invalid JSON -> None
+        std::fs::write(dir3.join("devcontainer-feature.json"), "not json").unwrap();
+        assert!(read_feature_metadata(&dir3).is_none());
+
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
         let _ = std::fs::remove_dir_all(&dir3);
