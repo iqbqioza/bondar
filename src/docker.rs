@@ -934,6 +934,7 @@ pub fn exec_in_container(
 
     if !status.success() {
         let code = status.code().unwrap_or(1);
+        crate::lifecycle::reap_children();
         std::process::exit(code);
     }
 

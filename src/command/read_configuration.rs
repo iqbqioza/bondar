@@ -116,6 +116,7 @@ pub fn run(
             eprintln!("{e}");
         }
         eprintln!("Configuration is INVALID");
+        crate::lifecycle::reap_children();
         std::process::exit(1);
     }
 
@@ -171,7 +172,14 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         env.insert(k, Value::String(v));
     }
 
-    merged.insert("name".into(), json!(cfg.name));
+    let default_name = ws
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "workspace".to_string());
+    merged.insert(
+        "name".into(),
+        json!(cfg.name.clone().unwrap_or(default_name)),
+    );
     merged.insert("image".into(), json!(cfg.image));
     merged.insert("workspaceFolder".into(), json!(cfg.workspace_folder));
     merged.insert("remoteUser".into(), json!(cfg.remote_user));

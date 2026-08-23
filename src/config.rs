@@ -281,6 +281,15 @@ impl DevContainerConfig {
                 ));
             }
         }
+        for port in &self.forward_ports {
+            if let ForwardPort::Number(n) = port
+                && *n == 0
+            {
+                return Err(BondarError::Config(format!(
+                    "'forwardPorts' entry {n} is outside the valid port range 1-65535"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -601,6 +610,26 @@ mod tests {
         let cfg2: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "remoteEnv": {"": "value"}}"#).unwrap();
         assert!(cfg2.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_forward_ports_range() {
+        let bad: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "forwardPorts": [0]}"#).unwrap();
+        assert!(bad.validate().is_err());
+
+        // 65536 exceeds u16 and fails deserialization
+        assert!(
+            serde_json::from_str::<DevContainerConfig>(
+                r#"{"image": "ubuntu", "forwardPorts": [65536]}"#
+            )
+            .is_err()
+        );
+
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "forwardPorts": [1, 65535, "8080:80"]}"#)
+                .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]

@@ -517,6 +517,7 @@ pub fn compose_exec(
         .map_err(|e| BondarError::Docker(format!("Failed to run docker compose exec: {e}")))?;
     if !status.success() {
         let code = status.code().unwrap_or(1);
+        crate::lifecycle::reap_children();
         std::process::exit(code);
     }
     Ok(())

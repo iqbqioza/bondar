@@ -292,7 +292,9 @@ fn build_container_command(
 
     if let Some(env_map) = exec.env {
         for (k, v) in env_map {
-            docker_cmd.arg("-e").arg(format!("{k}={v}"));
+            let expanded_v =
+                crate::docker::expand_vars_for_container(v, exec.workspace_folder, exec.workdir);
+            docker_cmd.arg("-e").arg(format!("{k}={expanded_v}"));
         }
     }
 

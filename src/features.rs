@@ -234,8 +234,35 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
         "docker pull",
     )?;
     if ok {
-        println!("  Pulled feature image {feature_image}");
-        Ok(())
+        println!("  Pulled feature image {feature_image}; extracting feature files...");
+        let tmp_name = format!("bondar-feature-extract-{}", std::process::id());
+        let created = std::process::Command::new("docker")
+            .args(["create", "--name", &tmp_name, feature_image])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        let extracted = created
+            && std::process::Command::new("docker")
+                .args([
+                    "cp",
+                    &format!("{tmp_name}:/"),
+                    dest_dir.to_str().unwrap_or("/tmp"),
+                ])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &tmp_name])
+            .status();
+        if extracted {
+            println!("  Extracted feature files from image");
+            ensure_extracted(dest_dir);
+            return Ok(());
+        }
+        eprintln!("  Warning: could not extract feature files from pulled image");
+        Err(BondarError::Docker(format!(
+            "Unable to fetch feature {id} (no oras, docker pull extraction failed)"
+        )))
     } else {
         eprintln!(
             "  Note: docker pull failed for {feature_image}: {}",

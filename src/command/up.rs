@@ -328,6 +328,12 @@ fn run_compose(
 ) -> Result<()> {
     crate::compose::check_compose_available()?;
 
+    if no_build && no_cache {
+        eprintln!(
+            "Warning: --no-build and --no-cache combined; build is skipped so --no-cache has no effect"
+        );
+    }
+
     let (was_existing, was_running) = crate::compose::service_container_state(cfg, cfg_path, ws)?;
 
     if let Some(cmd) = &cfg.initialize_command {
