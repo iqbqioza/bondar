@@ -45,11 +45,15 @@ pub fn compose_up(
     config: &DevContainerConfig,
     config_path: &Path,
     workspace_folder: &Path,
+    remove_existing: bool,
 ) -> Result<()> {
     println!("Starting Docker Compose services...");
     let mut cmd = compose_base_command(config, config_path)?;
     cmd.arg("up");
     cmd.arg("-d");
+    if remove_existing {
+        cmd.arg("--force-recreate");
+    }
     if let Some(services) = config.extra.get("runServices").and_then(|v| v.as_array()) {
         for s in services {
             if let Some(name) = s.as_str() {

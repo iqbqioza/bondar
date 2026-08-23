@@ -43,6 +43,10 @@ pub enum Commands {
         /// Do not build image even if build is configured
         #[arg(long)]
         no_build: bool,
+
+        /// Do not use cache when building (implies build)
+        #[arg(long)]
+        no_cache: bool,
     },
 
     /// Stop and remove the dev container

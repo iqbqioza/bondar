@@ -4,6 +4,7 @@ mod compose;
 mod config;
 mod docker;
 mod error;
+mod features;
 mod host;
 mod lifecycle;
 
@@ -25,11 +26,13 @@ fn main() {
             config,
             remove_existing_container,
             no_build,
+            no_cache,
         } => command::up::run(
             workspace_folder,
             config,
             remove_existing_container,
             no_build,
+            no_cache,
         ),
         Commands::Down {
             workspace_folder,

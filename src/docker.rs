@@ -282,6 +282,17 @@ pub fn create_and_start_container(
     cmd.arg("--label")
         .arg(format!("devcontainer.id={devcontainer_id}"));
 
+    if let Some(attrs) = &config.ports_attributes {
+        let json_str = serde_json::to_string(attrs).unwrap_or_default();
+        cmd.arg("--label")
+            .arg(format!("devcontainer.ports_attributes={json_str}"));
+    }
+    if let Some(other) = &config.other_ports_attributes {
+        let json_str = serde_json::to_string(other).unwrap_or_default();
+        cmd.arg("--label")
+            .arg(format!("devcontainer.other_ports_attributes={json_str}"));
+    }
+
     // Workspace mount
     if let Some(mount) = &config.workspace_mount {
         let expanded = expand_vars_for_host(mount, workspace_folder);

@@ -26,6 +26,46 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     if let Some(ports) = &cfg.ports_attributes {
         println!("Ports attributes: {ports}");
     }
+    if let Some(other) = &cfg.other_ports_attributes {
+        println!("Other ports attributes: {other}");
+    }
+    if let Some(probe) = &cfg.user_env_probe {
+        println!("userEnvProbe: {probe}");
+    }
+    if let Some(feat) = &cfg.features {
+        println!("Features: {} feature(s)", feat.len());
+        for (id, opts) in feat {
+            println!("  {id}: {opts}");
+        }
+    }
+    if !cfg.extra.is_empty() {
+        println!("Unknown/custom fields (in extra):");
+        for (k, v) in &cfg.extra {
+            println!("  {k}: {v}");
+        }
+    }
+
+    // Validation
+    if cfg.image.is_none() && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
+        eprintln!("Warning: No image/build/dockerComposeFile specified");
+    }
+    if cfg.docker_compose_file.is_some() && cfg.service.is_none() {
+        eprintln!("Warning: dockerComposeFile requires service");
+    }
+    if let Some(wait) = &cfg.wait_for {
+        let valid = [
+            "initializeCommand",
+            "onCreateCommand",
+            "updateContentCommand",
+            "postCreateCommand",
+            "postStartCommand",
+            "postAttachCommand",
+        ];
+        if !valid.contains(&wait.as_str()) {
+            eprintln!("Warning: waitFor '{wait}' is invalid");
+        }
+    }
+
     if cfg.docker_compose_file.is_some() {
         println!(
             "Mode: Docker Compose (service: {})",
@@ -40,5 +80,6 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         );
     }
 
+    println!("\nConfiguration is valid");
     Ok(())
 }

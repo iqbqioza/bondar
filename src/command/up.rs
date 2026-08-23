@@ -11,6 +11,7 @@ pub fn run(
     config_path: Option<PathBuf>,
     remove_existing: bool,
     no_build: bool,
+    no_cache: bool,
 ) -> Result<()> {
     docker::check_docker_available()?;
 
@@ -22,17 +23,23 @@ pub fn run(
         println!("Detected lifecycle: {}", summary.join(", "));
     }
 
-    if cfg.extra.contains_key("features") {
-        eprintln!("Warning: 'features' is not yet supported and will be ignored");
-    }
-    if let Some(order) = &cfg.override_feature_install_order {
-        eprintln!("Warning: overrideFeatureInstallOrder {order:?} is not yet supported");
-    }
+    crate::features::handle_features(&cfg.features, &cfg.override_feature_install_order)?;
+
     if let Some(probe) = &cfg.user_env_probe {
-        eprintln!("Warning: userEnvProbe '{probe}' is not yet implemented");
+        match probe.as_str() {
+            "none" => {}
+            "interactiveShell" | "loginShell" | "loginInteractiveShell" => {
+                println!("userEnvProbe: {probe} (will probe via shell)");
+            }
+            _ => eprintln!("Warning: unknown userEnvProbe '{probe}'"),
+        }
     }
-    if cfg.ports_attributes.is_some() || cfg.other_ports_attributes.is_some() {
-        eprintln!("Warning: portsAttributes/otherPortsAttributes are for UI only, ignored");
+
+    if let Some(attrs) = &cfg.ports_attributes {
+        println!("portsAttributes: {attrs} (stored as container labels)");
+    }
+    if let Some(other) = &cfg.other_ports_attributes {
+        println!("otherPortsAttributes: {other}");
     }
     if let Some(action) = &cfg.shutdown_action
         && action != "stopContainer"
@@ -46,7 +53,7 @@ pub fn run(
     }
 
     if cfg.docker_compose_file.is_some() {
-        return run_compose(&cfg, &cfg_path, &ws, remove_existing);
+        return run_compose(&cfg, &cfg_path, &ws, remove_existing, no_cache);
     }
 
     let container_name = cfg.container_name(&ws);
@@ -65,7 +72,7 @@ pub fn run(
     let image_name = docker::resolve_image_name(&cfg, &cfg_path, &ws)?;
 
     if cfg.build.is_some() && !no_build {
-        docker::build_image(&cfg, &cfg_path, &ws, &image_name, false)?;
+        docker::build_image(&cfg, &cfg_path, &ws, &image_name, no_cache)?;
     }
 
     docker::create_and_start_container(
@@ -78,6 +85,29 @@ pub fn run(
     )?;
 
     host::handle_update_remote_user_uid(&cfg, &container_name)?;
+
+    if let Some(probe) = &cfg.user_env_probe
+        && probe != "none"
+    {
+        println!("Probing user env with {probe}...");
+        let (shell, args) = match probe.as_str() {
+            "interactiveShell" => ("bash", vec!["-i", "-c", "env"]),
+            "loginShell" => ("bash", vec!["-l", "-c", "env"]),
+            "loginInteractiveShell" => ("bash", vec!["-l", "-i", "-c", "env"]),
+            _ => ("sh", vec!["-c", "env"]),
+        };
+        let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
+        let mut probe_cmd = std::process::Command::new("docker");
+        probe_cmd.arg("exec");
+        if let Some(u) = exec_user {
+            probe_cmd.arg("--user").arg(u);
+        }
+        probe_cmd.arg(&container_name).arg(shell);
+        for a in args {
+            probe_cmd.arg(a);
+        }
+        let _ = probe_cmd.status();
+    }
 
     let workspace_target = cfg.workspace_folder_or_default();
     let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
@@ -169,7 +199,8 @@ fn run_compose(
     cfg: &config::DevContainerConfig,
     cfg_path: &std::path::Path,
     ws: &std::path::Path,
-    _remove_existing: bool,
+    remove_existing: bool,
+    no_cache: bool,
 ) -> Result<()> {
     crate::compose::check_compose_available()?;
 
@@ -178,7 +209,26 @@ fn run_compose(
         lifecycle::execute_host_lifecycle(cmd, ws)?;
     }
 
-    crate::compose::compose_up(cfg, cfg_path, ws)?;
+    if no_cache && cfg.docker_compose_file.is_some() {
+        // Force rebuild with no cache for compose
+        let mut build_cmd = std::process::Command::new("docker");
+        build_cmd.arg("compose");
+        for arg in crate::compose::compose_files_args_for_build(cfg, cfg_path)? {
+            build_cmd.arg(arg);
+        }
+        build_cmd.arg("build").arg("--no-cache");
+        build_cmd.current_dir(ws);
+        let status = build_cmd.status().map_err(|e| {
+            crate::error::BondarError::Docker(format!("Failed to run compose build: {e}"))
+        })?;
+        if !status.success() {
+            return Err(crate::error::BondarError::Docker(
+                "docker compose build failed".to_string(),
+            ));
+        }
+    }
+
+    crate::compose::compose_up(cfg, cfg_path, ws, remove_existing)?;
 
     let service = cfg.service.as_deref().unwrap_or("service");
     let container_name = crate::compose::get_service_container_name(cfg, cfg_path, ws)

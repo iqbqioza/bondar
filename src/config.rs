@@ -71,6 +71,9 @@ pub struct DevContainerConfig {
     #[serde(rename = "init", default)]
     pub init: Option<bool>,
 
+    #[serde(default)]
+    pub features: Option<HashMap<String, serde_json::Value>>,
+
     #[serde(rename = "portsAttributes", default)]
     pub ports_attributes: Option<serde_json::Value>,
 
