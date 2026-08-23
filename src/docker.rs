@@ -361,6 +361,9 @@ pub fn create_and_start_container(
     }
 
     // Labels for tracking
+    if workspace_folder_str.contains('"') {
+        eprintln!("Warning: workspace path contains '\"', which may break docker labels");
+    }
     cmd.arg("--label")
         .arg(format!("devcontainer.local_folder={workspace_folder_str}"));
     cmd.arg("--label").arg(format!(
