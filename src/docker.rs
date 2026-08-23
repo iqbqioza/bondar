@@ -756,11 +756,18 @@ pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
     for (key, spec) in secrets {
         match spec {
             serde_json::Value::Object(map) => {
-                let var_name = map
-                    .get("localEnv")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .unwrap_or_else(|| key.clone());
+                let var_name = match map.get("localEnv") {
+                    Some(v) => match v.as_str() {
+                        Some(s) => s.to_string(),
+                        None => {
+                            eprintln!(
+                                "Warning: secret '{key}' localEnv must be a string, got {v}; using the secret name as the variable name"
+                            );
+                            key.clone()
+                        }
+                    },
+                    None => key.clone(),
+                };
                 if let Ok(value) = std::env::var(&var_name) {
                     resolved.push((key.clone(), value));
                 } else {

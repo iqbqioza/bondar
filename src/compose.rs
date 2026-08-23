@@ -555,6 +555,20 @@ mod tests {
     }
 
     #[test]
+    fn test_mount_string_relative_bind_source() {
+        // Conversion still succeeds for relative sources (a warning is
+        // emitted about the named-volume interpretation)
+        assert_eq!(
+            mount_string_to_compose_volume("type=bind,source=data,target=/data"),
+            Some("data:/data".to_string())
+        );
+        assert_eq!(
+            mount_string_to_compose_volume("type=bind,source=./data,target=/data"),
+            Some("./data:/data".to_string())
+        );
+    }
+
+    #[test]
     fn test_escape_yaml_value() {
         assert_eq!(escape_yaml_value("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
         assert_eq!(escape_yaml_value("plain"), "plain");

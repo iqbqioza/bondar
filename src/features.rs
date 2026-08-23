@@ -264,11 +264,20 @@ fn ensure_extracted(dest_dir: &Path) {
                 .arg("-C")
                 .arg(dest_dir)
                 .status();
-            if let Ok(s) = status
-                && s.success()
-            {
-                println!("  Expanded {name}");
-                let _ = std::fs::remove_file(&path);
+            match status {
+                Ok(s) if s.success() => {
+                    println!("  Expanded {name}");
+                    let _ = std::fs::remove_file(&path);
+                }
+                Ok(s) => {
+                    eprintln!(
+                        "  Warning: failed to expand {name} (tar exit {})",
+                        s.code().unwrap_or(-1)
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  Warning: failed to run tar for {name}: {e}");
+                }
             }
         }
     }

@@ -7,6 +7,9 @@ pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path
             eprintln!("Warning: hostRequirements.cpus must be an integer, got {cpus}");
         }
         if let Some(c) = cpus.as_u64() {
+            if c == 0 {
+                eprintln!("Warning: hostRequirements.cpus must be at least 1, got 0");
+            }
             let available = available_cpus();
             if available < c {
                 eprintln!(
