@@ -406,7 +406,16 @@ fn get_host_uid() -> u32 {
 
 /// Chown the workspace directory to the given user, guarding against "/".
 fn chown_workspace(config: &crate::config::DevContainerConfig, container_name: &str, user: &str) {
-    let chown_target = config.workspace_folder_or_default();
+    // For compose, the default workspace folder is "/" (spec); chown of "/"
+    // is skipped below, so only chown when workspaceFolder is set explicitly.
+    let chown_target = if config.docker_compose_file.is_some() {
+        config
+            .workspace_folder
+            .clone()
+            .unwrap_or_else(|| "/".to_string())
+    } else {
+        config.workspace_folder_or_default()
+    };
     if chown_target == "/" {
         eprintln!(
             "Warning: skipping chown of '/' (would alter container-wide ownership); set workspaceFolder to a specific directory"
