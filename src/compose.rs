@@ -79,23 +79,28 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         .service
         .as_deref()
         .ok_or_else(|| BondarError::Config("No service specified".to_string()))?;
+    let container_target = config
+        .workspace_folder
+        .clone()
+        .unwrap_or_else(|| "/".to_string());
 
     let mut yaml = String::from("services:\n");
     yaml.push_str(&format!("  {service}:\n"));
 
-    let has_env = !config.container_env.is_empty()
-        || !config.remote_env.is_empty()
-        || !config.secrets.as_ref().is_none_or(|s| s.is_empty());
+    let has_env =
+        !config.container_env.is_empty() || !config.secrets.as_ref().is_none_or(|s| s.is_empty());
     let mut ports: Vec<String> = Vec::new();
     for port in &config.forward_ports {
         let port_str = match port {
             crate::config::ForwardPort::Number(n) => n.to_string(),
             crate::config::ForwardPort::Text(s) => s.clone(),
         };
-        if port_str.contains(':') {
-            ports.push(format!("\"{port_str}\""));
+        if let Some(publish) = crate::docker::publish_port_arg(&port_str) {
+            ports.push(format!("\"{publish}\""));
         } else {
-            ports.push(format!("\"{port_str}:{port_str}\""));
+            eprintln!(
+                "Warning: forwardPorts '{port_str}' references a service host, cannot publish in compose override"
+            );
         }
     }
     if let Some(app_port) = &config.app_port {
@@ -106,7 +111,13 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
             }
         };
         for p in app_ports {
-            ports.push(format!("\"{p}:{p}\""));
+            if let Some(publish) = crate::docker::publish_port_arg(&p) {
+                ports.push(format!("\"{publish}\""));
+            } else {
+                eprintln!(
+                    "Warning: appPort '{p}' references a service host, cannot publish in compose override"
+                );
+            }
         }
     }
 
@@ -114,7 +125,11 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     for m in &config.mounts {
         match m {
             MountValue::String(s) => {
-                let expanded = crate::docker::expand_vars_for_host(s, workspace_folder);
+                let expanded = crate::docker::expand_vars_for_host_with_target(
+                    s,
+                    workspace_folder,
+                    &container_target,
+                );
                 if let Some(vol) = mount_string_to_compose_volume(&expanded) {
                     volumes.push(vol);
                 }
@@ -123,13 +138,19 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 if let Some(target) = &obj.target {
                     let mut vol = String::new();
                     if let Some(source) = &obj.source {
-                        let expanded =
-                            crate::docker::expand_vars_for_host(source, workspace_folder);
+                        let expanded = crate::docker::expand_vars_for_host_with_target(
+                            source,
+                            workspace_folder,
+                            &container_target,
+                        );
                         vol.push_str(&expanded);
                         vol.push(':');
                     }
-                    let expanded_target =
-                        crate::docker::expand_vars_for_host(target, workspace_folder);
+                    let expanded_target = crate::docker::expand_vars_for_host_with_target(
+                        target,
+                        workspace_folder,
+                        &container_target,
+                    );
                     vol.push_str(&expanded_target);
                     volumes.push(vol);
                 }
@@ -141,8 +162,12 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     if has_env {
         wrote_any = true;
         yaml.push_str("    environment:\n");
-        for (k, v) in config.container_env.iter().chain(config.remote_env.iter()) {
-            let expanded = crate::docker::expand_vars_for_host(v, workspace_folder);
+        for (k, v) in &config.container_env {
+            let expanded = crate::docker::expand_vars_for_host_with_target(
+                v,
+                workspace_folder,
+                &container_target,
+            );
             yaml.push_str(&format!("      {k}: \"{expanded}\"\n"));
         }
         for (k, v) in crate::docker::resolve_secrets(config) {

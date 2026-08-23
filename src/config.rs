@@ -198,9 +198,19 @@ impl DevContainerConfig {
                 "Either 'image', 'build' or 'dockerComposeFile' must be specified".to_string(),
             ));
         }
+        if self.image.is_some() && self.build.is_some() {
+            return Err(BondarError::Config(
+                "'image' and 'build' cannot both be specified".to_string(),
+            ));
+        }
         if self.docker_compose_file.is_some() && self.service.is_none() {
             return Err(BondarError::Config(
                 "'service' must be specified when using 'dockerComposeFile'".to_string(),
+            ));
+        }
+        if self.docker_compose_file.is_some() && (self.image.is_some() || self.build.is_some()) {
+            return Err(BondarError::Config(
+                "'dockerComposeFile' cannot be combined with 'image' or 'build'".to_string(),
             ));
         }
         Ok(())

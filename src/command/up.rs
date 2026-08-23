@@ -62,6 +62,17 @@ pub fn run(
         false
     };
 
+    // Warn if another container exists for the same workspace (name collision)
+    if let Ok(others) = docker::find_containers_for_workspace(&ws) {
+        for other in others {
+            if other != container_name {
+                eprintln!(
+                    "Warning: existing container '{other}' is bound to this workspace; consider '--remove-existing-container' or a unique 'name'"
+                );
+            }
+        }
+    }
+
     if let Some(cmd) = &cfg.initialize_command {
         println!("Running initializeCommand on host...");
         lifecycle::execute_host_lifecycle(cmd, &ws)?;

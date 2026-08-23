@@ -47,10 +47,6 @@ pub fn run(
         return Ok(());
     }
 
-    if cfg.extra.contains_key("features") {
-        eprintln!("Warning: 'features' is not yet supported and will be ignored");
-    }
-
     let image_name = docker::resolve_image_name(&cfg, &cfg_path, &ws)?;
     docker::build_image(&cfg, &cfg_path, &ws, &image_name, no_cache)?;
 

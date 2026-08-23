@@ -3,14 +3,6 @@ use std::path::Path;
 
 use crate::error::{BondarError, Result};
 
-#[allow(dead_code)]
-pub fn handle_features(
-    features: &Option<HashMap<String, serde_json::Value>>,
-    override_order: &Option<Vec<String>>,
-) -> Result<()> {
-    handle_features_with_container(features, override_order, None, None, None)
-}
-
 pub fn handle_features_with_container(
     features: &Option<HashMap<String, serde_json::Value>>,
     override_order: &Option<Vec<String>>,
@@ -355,9 +347,9 @@ mod tests {
 
     #[test]
     fn test_handle_empty() {
-        assert!(handle_features(&None, &None).is_ok());
+        assert!(handle_features_with_container(&None, &None, None, None, None).is_ok());
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
-        assert!(handle_features(&Some(empty), &None).is_ok());
+        assert!(handle_features_with_container(&Some(empty), &None, None, None, None).is_ok());
     }
 
     #[test]

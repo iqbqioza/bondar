@@ -184,6 +184,34 @@ pub fn container_running(name: &str) -> Result<bool> {
     Ok(stdout.lines().any(|line| line.trim() == name))
 }
 
+pub fn find_containers_for_workspace(workspace_folder: &Path) -> Result<Vec<String>> {
+    let output = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!(
+                "label=devcontainer.local_folder={}",
+                workspace_folder.display()
+            ),
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker ps: {e}")))?;
+
+    if !output.status.success() {
+        return Err(BondarError::Docker("docker ps failed".to_string()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
 pub fn remove_container(name: &str) -> Result<()> {
     let status = Command::new("docker")
         .args(["rm", "-f", name])
@@ -259,7 +287,8 @@ pub fn create_and_start_container(
     }
 
     for run_arg in &config.run_args {
-        let expanded = expand_vars_for_host(run_arg, workspace_folder);
+        let expanded =
+            expand_vars_for_host_with_target(run_arg, workspace_folder, &workspace_target);
         cmd.arg(&expanded);
     }
 
@@ -295,22 +324,23 @@ pub fn create_and_start_container(
 
     // Workspace mount
     if let Some(mount) = &config.workspace_mount {
-        let expanded = expand_vars_for_host(mount, workspace_folder);
+        let expanded = expand_vars_for_host_with_target(mount, workspace_folder, &workspace_target);
         cmd.arg("--mount").arg(&expanded);
     } else {
         let mount = format!(
             "type=bind,source={workspace_folder_str},target={workspace_target},consistency=cached"
         );
         cmd.arg("--mount").arg(&mount);
-        // Also set working dir
-        cmd.arg("-w").arg(&workspace_target);
     }
+    // Always set working dir to the workspace folder
+    cmd.arg("-w").arg(&workspace_target);
 
     // Additional mounts
     for m in &config.mounts {
         match m {
             MountValue::String(s) => {
-                let expanded = expand_vars(s, workspace_folder);
+                let expanded =
+                    expand_vars_for_host_with_target(s, workspace_folder, &workspace_target);
                 cmd.arg("--mount").arg(expanded);
             }
             MountValue::Object(obj) => {
@@ -319,10 +349,16 @@ pub fn create_and_start_container(
                     parts.push(format!("type={t}"));
                 }
                 if let Some(s) = &obj.source {
-                    parts.push(format!("source={}", expand_vars(s, workspace_folder)));
+                    parts.push(format!(
+                        "source={}",
+                        expand_vars_for_host_with_target(s, workspace_folder, &workspace_target)
+                    ));
                 }
                 if let Some(t) = &obj.target {
-                    parts.push(format!("target={}", expand_vars(t, workspace_folder)));
+                    parts.push(format!(
+                        "target={}",
+                        expand_vars_for_host_with_target(t, workspace_folder, &workspace_target)
+                    ));
                 }
                 if !parts.is_empty() {
                     cmd.arg("--mount").arg(parts.join(","));
@@ -333,11 +369,7 @@ pub fn create_and_start_container(
 
     // Env - containerEnv and remoteEnv (both set as -e for now)
     for (k, v) in &config.container_env {
-        let expanded_v = expand_vars_for_host(v, workspace_folder);
-        cmd.arg("-e").arg(format!("{k}={expanded_v}"));
-    }
-    for (k, v) in &config.remote_env {
-        let expanded_v = expand_vars_for_host(v, workspace_folder);
+        let expanded_v = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
         cmd.arg("-e").arg(format!("{k}={expanded_v}"));
     }
 
@@ -352,13 +384,12 @@ pub fn create_and_start_container(
             crate::config::ForwardPort::Number(n) => n.to_string(),
             crate::config::ForwardPort::Text(s) => s.clone(),
         };
-        // forwardPorts in bondar: publish them
-        if let Some(colon) = port_str.find(':') {
-            let host = &port_str[..colon];
-            let container = &port_str[colon + 1..];
-            cmd.arg("-p").arg(format!("{host}:{container}"));
+        if let Some(publish) = publish_port_arg(&port_str) {
+            cmd.arg("-p").arg(publish);
         } else {
-            cmd.arg("-p").arg(format!("{port_str}:{port_str}"));
+            eprintln!(
+                "Warning: forwardPorts '{port_str}' references a service host, cannot publish with docker run"
+            );
         }
     }
 
@@ -370,7 +401,13 @@ pub fn create_and_start_container(
             }
         };
         for p in ports {
-            cmd.arg("-p").arg(format!("{p}:{p}"));
+            if let Some(publish) = publish_port_arg(&p) {
+                cmd.arg("-p").arg(publish);
+            } else {
+                eprintln!(
+                    "Warning: appPort '{p}' references a service host, cannot publish with docker run"
+                );
+            }
         }
     }
 
@@ -410,11 +447,54 @@ fn port_value_to_string(p: &crate::config::PortValue) -> String {
     }
 }
 
-fn expand_vars(input: &str, workspace_folder: &Path) -> String {
-    expand_vars_for_host(input, workspace_folder)
+pub fn publish_port_arg(spec: &str) -> Option<String> {
+    if spec.is_empty() {
+        return None;
+    }
+    // No colon: single port -> host:container with the same number
+    if !spec.contains(':') {
+        if spec.parse::<u16>().is_ok() {
+            return Some(format!("{spec}:{spec}"));
+        }
+        return None;
+    }
+    let mut parts = spec.split(':');
+    let first = parts.next().unwrap_or("");
+    let rest = parts.collect::<Vec<_>>();
+    // "host:container"
+    if rest.len() == 1 {
+        let host_is_ip = first.contains('.') && first.split('.').all(|x| x.parse::<u16>().is_ok());
+        let host_is_number = first.parse::<u16>().is_ok();
+        if host_is_ip {
+            // "127.0.0.1:9090" -> "127.0.0.1:9090:9090"
+            return Some(format!("{spec}:{}", rest[0]));
+        }
+        if host_is_number || host_is_ip {
+            // "8080:80" -> "8080:80"
+            return Some(spec.to_string());
+        }
+        // "db:5432" -> service host, cannot publish
+        return None;
+    }
+    // "ip:host:container"
+    if rest.len() == 2 {
+        let ip_ok = first.contains('.') && first.split('.').all(|x| x.parse::<u16>().is_ok());
+        if ip_ok && rest[0].parse::<u16>().is_ok() && rest[1].parse::<u16>().is_ok() {
+            return Some(spec.to_string());
+        }
+    }
+    None
 }
 
 pub fn expand_vars_for_host(input: &str, workspace_folder: &Path) -> String {
+    expand_vars_for_host_with_target(input, workspace_folder, "/workspace")
+}
+
+pub fn expand_vars_for_host_with_target(
+    input: &str,
+    workspace_folder: &Path,
+    container_workspace: &str,
+) -> String {
     let mut result = input.to_string();
     let ws = workspace_folder.to_string_lossy().to_string();
     let basename = workspace_folder
@@ -422,12 +502,16 @@ pub fn expand_vars_for_host(input: &str, workspace_folder: &Path) -> String {
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_string();
-    let container_ws = "/workspace".to_string();
 
     result = result.replace("${localWorkspaceFolder}", &ws);
     result = result.replace("${localWorkspaceFolderBasename}", &basename);
-    result = result.replace("${containerWorkspaceFolder}", &container_ws);
-    result = result.replace("${containerWorkspaceFolderBasename}", "workspace");
+    result = result.replace("${containerWorkspaceFolder}", container_workspace);
+    let container_basename = container_workspace
+        .rsplit('/')
+        .next()
+        .unwrap_or("workspace")
+        .to_string();
+    result = result.replace("${containerWorkspaceFolderBasename}", &container_basename);
 
     result = expand_local_env_vars(&result);
     result = expand_container_env_vars(&result);
@@ -619,7 +703,8 @@ pub fn exec_in_container(
     if let Some(env_map) = env {
         for (k, v) in env_map {
             let expanded_v = if let Some(ws) = workspace_folder {
-                expand_vars_for_host(v, ws)
+                let target = workdir.unwrap_or("/workspace");
+                expand_vars_for_host_with_target(v, ws, target)
             } else {
                 v.clone()
             };
@@ -655,4 +740,41 @@ pub fn get_workspace_folder(provided: Option<PathBuf>) -> Result<PathBuf> {
 
     let cwd = std::env::current_dir()?;
     Ok(cwd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_publish_port_arg_number() {
+        assert_eq!(publish_port_arg("8080"), Some("8080:8080".to_string()));
+    }
+
+    #[test]
+    fn test_publish_port_arg_host_container() {
+        assert_eq!(publish_port_arg("8080:80"), Some("8080:80".to_string()));
+    }
+
+    #[test]
+    fn test_publish_port_arg_ip() {
+        assert_eq!(
+            publish_port_arg("127.0.0.1:9090"),
+            Some("127.0.0.1:9090:9090".to_string())
+        );
+    }
+
+    #[test]
+    fn test_publish_port_arg_ip_host_container() {
+        assert_eq!(
+            publish_port_arg("127.0.0.1:8080:80"),
+            Some("127.0.0.1:8080:80".to_string())
+        );
+    }
+
+    #[test]
+    fn test_publish_port_arg_service_name() {
+        assert_eq!(publish_port_arg("db:5432"), None);
+        assert_eq!(publish_port_arg("not-a-port"), None);
+    }
 }
