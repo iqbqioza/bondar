@@ -571,6 +571,19 @@ mod tests {
     }
 
     #[test]
+    fn test_mount_string_anonymous_volume() {
+        // source-less volume mount -> target only (anonymous volume)
+        assert_eq!(
+            mount_string_to_compose_volume("type=volume,target=/data"),
+            Some("/data".to_string())
+        );
+        assert_eq!(
+            mount_string_to_compose_volume("type=volume,target=/data,ro"),
+            Some("/data:ro".to_string())
+        );
+    }
+
+    #[test]
     fn test_mount_string_tmpfs_not_supported() {
         assert_eq!(
             mount_string_to_compose_volume("type=tmpfs,target=/data"),
@@ -597,6 +610,7 @@ mod tests {
         assert_eq!(escape_yaml_value("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
         assert_eq!(escape_yaml_value("plain"), "plain");
         assert_eq!(escape_yaml_value("a\tb\rc"), "a\\tb\\rc");
+        assert_eq!(escape_yaml_value(""), "");
     }
 
     #[test]

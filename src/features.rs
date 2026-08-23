@@ -148,8 +148,9 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
                         eprintln!(
                             "Warning: feature '{id}' installsAfter references unknown feature '{dep_str}'"
                         );
+                    } else {
+                        visit(dep_str, feat_map, sorted, visiting, visited);
                     }
-                    visit(dep_str, feat_map, sorted, visiting, visited);
                 }
             }
         }
@@ -607,5 +608,29 @@ mod tests {
         );
         let sorted = sort_by_installs_after(&feat_map);
         assert_eq!(sorted.len(), 2);
+    }
+
+    #[test]
+    fn test_sort_by_installs_after_unknown_dependency() {
+        // Unknown dependency is skipped (a warning is emitted), no hang
+        let mut feat_map: HashMap<String, serde_json::Value> = HashMap::new();
+        feat_map.insert(
+            "ghcr.io/a/only".to_string(),
+            serde_json::json!({ "installsAfter": ["ghcr.io/a/missing"] }),
+        );
+        let sorted = sort_by_installs_after(&feat_map);
+        assert_eq!(sorted, vec!["ghcr.io/a/only"]);
+    }
+
+    #[test]
+    fn test_sort_by_installs_after_non_array() {
+        // Non-array installsAfter is warned and ignored
+        let mut feat_map: HashMap<String, serde_json::Value> = HashMap::new();
+        feat_map.insert(
+            "ghcr.io/a/x".to_string(),
+            serde_json::json!({ "installsAfter": "not-an-array" }),
+        );
+        let sorted = sort_by_installs_after(&feat_map);
+        assert_eq!(sorted.len(), 1);
     }
 }

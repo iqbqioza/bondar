@@ -1117,4 +1117,46 @@ mod tests {
         assert!(!is_port_ignored(&cfg, "9090"));
         assert!(!is_port_ignored(&DevContainerConfig::default(), "3000"));
     }
+
+    #[test]
+    fn test_is_udp_port_other_attributes_fallback() {
+        let cfg = DevContainerConfig {
+            other_ports_attributes: Some(serde_json::json!({
+                "protocol": "udp"
+            })),
+            ..Default::default()
+        };
+        assert!(is_udp_port(&cfg, "9090"));
+        assert!(is_udp_port(&cfg, "127.0.0.1:9090"));
+    }
+
+    #[test]
+    fn test_is_port_ignored_other_attributes_fallback() {
+        let cfg = DevContainerConfig {
+            other_ports_attributes: Some(serde_json::json!({
+                "onAutoForward": "ignore"
+            })),
+            ..Default::default()
+        };
+        assert!(is_port_ignored(&cfg, "9090"));
+        assert!(!is_port_ignored(&DevContainerConfig::default(), "9090"));
+    }
+
+    #[test]
+    fn test_publish_port_arg_zero() {
+        assert_eq!(publish_port_arg("0"), Some("0:0".to_string()));
+        assert_eq!(publish_port_arg("0:0"), Some("0:0".to_string()));
+    }
+
+    #[test]
+    fn test_expand_vars_complex() {
+        let ws = std::path::Path::new("/home/user/proj");
+        let expanded = expand_vars_for_host_with_target(
+            "ws=${localWorkspaceFolder};id=${devcontainerId}",
+            ws,
+            "/myws",
+        );
+        let id = devcontainer_id_for(ws);
+        assert_eq!(expanded, format!("ws=/home/user/proj;id={id}"));
+    }
 }

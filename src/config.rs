@@ -622,9 +622,47 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_whitespace_name() {
+    fn test_whitespace_name() {
         let cfg: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "name": "   "}"#).unwrap();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_workspace_mount_ok() {
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "workspaceMount": "type=bind,source=.,target=/x", "workspaceFolder": "/x"}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_container_name_uppercase() {
+        let cfg = DevContainerConfig {
+            name: Some("MyProject".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.container_name(Path::new("/tmp/x")), "bondar-MyProject");
+    }
+
+    #[test]
+    fn test_strip_json_comments_escaped_backslash() {
+        let input = r#"{"path": "C:\\temp\\//notcomment"}"#;
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(v["path"], "C:\\temp\\//notcomment");
+    }
+
+    #[test]
+    fn test_find_config_path_prefers_devcontainer_dir() {
+        let dir = std::env::temp_dir().join("bondar-cfg-pref");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        std::fs::write(dir.join(".devcontainer/devcontainer.json"), "{}").unwrap();
+        std::fs::write(dir.join(".devcontainer.json"), "{}").unwrap();
+        let found = find_config_path(&dir).unwrap();
+        assert_eq!(found.file_name().unwrap(), "devcontainer.json");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

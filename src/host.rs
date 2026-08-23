@@ -539,4 +539,19 @@ mod tests {
     fn test_available_cpus() {
         assert!(available_cpus() >= 1);
     }
+
+    #[test]
+    fn test_format_bytes_boundaries() {
+        assert_eq!(format_bytes(1023), "1023b");
+        assert_eq!(format_bytes(1024), "1.0kb");
+        assert_eq!(format_bytes(1024 * 1024), "1.0mb");
+        assert_eq!(format_bytes(5 * 1024 * 1024 * 1024), "5.0gb");
+    }
+
+    #[test]
+    fn test_parse_size_case_insensitive() {
+        assert_eq!(parse_size("4GB"), parse_size("4gb"));
+        assert_eq!(parse_size("512MB"), Some(512 * 1024 * 1024));
+        assert_eq!(parse_size("2TB"), Some(2 * 1024u64.pow(4)));
+    }
 }
