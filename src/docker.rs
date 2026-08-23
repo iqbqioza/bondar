@@ -658,6 +658,11 @@ pub fn validate_port_spec(s: &str) -> std::result::Result<(), String> {
             validate_container_port(parts[1])
         }
         3 => {
+            // Three-part forms are "ip:host:container"; the first part must be
+            // an IPv4 address (e.g. "127.0.0.1:8080:80")
+            if !is_ipv4(parts[0]) {
+                return Err(format!("'{}' is not a valid IPv4 bind address", parts[0]));
+            }
             validate_host_port(parts[1])?;
             validate_container_port(parts[2])
         }
@@ -1441,6 +1446,10 @@ mod tests {
         assert!(validate_port_spec("70000:8080").is_err());
         // Service names pass
         assert!(validate_port_spec("db:5432").is_ok());
+        // Three-part forms require an IPv4 bind address
+        assert!(validate_port_spec("8080:80:90").is_err());
+        assert!(validate_port_spec("localhost:8080:80").is_err());
+        assert!(validate_port_spec("127.0.0.1:8080:80").is_ok());
         // IPv6 forms with stray colons are rejected
         assert!(validate_port_spec("[::1]:8080:").is_err());
         assert!(validate_port_spec("[::1]:8080:80:").is_err());

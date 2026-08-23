@@ -3,9 +3,6 @@ use std::path::Path;
 
 pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path) -> Result<()> {
     if let Some(cpus) = req.get("cpus") {
-        if cpus.is_f64() {
-            eprintln!("Warning: hostRequirements.cpus must be an integer, got {cpus}");
-        }
         if let Some(c) = cpus.as_u64() {
             if c == 0 {
                 eprintln!("Warning: hostRequirements.cpus must be at least 1, got 0");

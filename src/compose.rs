@@ -304,8 +304,31 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     // clobber each other's override file.
     let project = crate::docker::compose_project_name(workspace_folder);
     let override_path = std::env::temp_dir().join(format!("{project}-override.yml"));
-    std::fs::write(&override_path, yaml).map_err(BondarError::Io)?;
+    write_override_file(&override_path, yaml)?;
     Ok(override_path)
+}
+
+/// Write the override file with owner-only permissions (it may contain
+/// resolved secret values).
+fn write_override_file(path: &Path, contents: String) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(BondarError::Io)?;
+        f.write_all(contents.as_bytes()).map_err(BondarError::Io)?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents).map_err(BondarError::Io)?;
+    }
+    Ok(())
 }
 
 fn compose_base_command(
@@ -878,6 +901,28 @@ mod tests {
         let _ = std::fs::remove_file(&path_b);
         let _ = std::fs::remove_dir_all(&dir_a);
         let _ = std::fs::remove_dir_all(dir_b.parent().unwrap());
+    }
+
+    #[test]
+    fn test_override_file_owner_only_permissions() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = std::env::temp_dir().join("bondar-ovr-perms");
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let cfg = DevContainerConfig {
+                service: Some("app".to_string()),
+                container_env: HashMap::from([("SEC".to_string(), "v".to_string())]),
+                ..Default::default()
+            };
+            let path = write_compose_override(&cfg, &dir).unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            // Override files may contain resolved secrets: owner-only access
+            assert_eq!(mode & 0o777, 0o600, "override file must be 0600");
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]
