@@ -352,6 +352,8 @@ fn run_compose(
                 "docker compose build failed".to_string(),
             ));
         }
+    } else if no_build {
+        println!("Skipping compose build (--no-build)");
     }
 
     crate::compose::compose_up(cfg, cfg_path, ws, remove_existing, no_build)?;

@@ -355,6 +355,11 @@ fn install_in_container(
     // Pass feature options as environment variables
     if let serde_json::Value::Object(map) = opts {
         for (k, v) in map {
+            // `installsAfter` is metadata consumed by bondar, not an
+            // environment variable for the install script
+            if k == "installsAfter" {
+                continue;
+            }
             let value = match v {
                 serde_json::Value::String(s) => s.clone(),
                 serde_json::Value::Bool(b) => b.to_string(),

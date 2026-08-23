@@ -935,6 +935,14 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_vars_devcontainer_id() {
+        let ws = std::path::Path::new("/home/user/proj");
+        let id = devcontainer_id_for(ws);
+        let expanded = expand_vars_for_host_with_target("id=${devcontainerId}", ws, "/workspace");
+        assert_eq!(expanded, format!("id={id}"));
+    }
+
+    #[test]
     fn test_expand_local_env_vars_default() {
         assert_eq!(
             expand_local_env_vars("${localEnv:UNSET_VAR_XYZ_123:fallback}"),

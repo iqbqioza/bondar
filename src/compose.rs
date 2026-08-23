@@ -45,6 +45,7 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
     let mut target = None;
     let mut readonly = false;
     let mut is_tmpfs = false;
+    let mut is_bind = false;
     for part in mount.split(',') {
         let part = part.trim();
         if part.is_empty() {
@@ -52,7 +53,10 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
         }
         if let Some((key, value)) = part.split_once('=') {
             match key {
-                "type" => is_tmpfs = value == "tmpfs",
+                "type" => {
+                    is_tmpfs = value == "tmpfs";
+                    is_bind = value == "bind";
+                }
                 "source" | "src" => source = Some(value),
                 "target" | "dst" | "destination" => target = Some(value),
                 "readonly" | "ro" => readonly = value == "true" || value == "1",
@@ -70,6 +74,13 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
         return None;
     }
     let source = source.unwrap_or_default();
+    // A relative bind source (not ./ or /) becomes a named volume in the
+    // compose short syntax - warn about the behavioral difference
+    if is_bind && !source.is_empty() && !source.starts_with('/') && !source.starts_with("./") {
+        eprintln!(
+            "Warning: bind mount source '{source}' is relative; compose short syntax will treat it as a named volume"
+        );
+    }
     let target = target?;
     let mut vol = String::new();
     if !source.is_empty() {
