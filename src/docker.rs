@@ -848,7 +848,7 @@ pub fn exec_in_container(
 ) -> Result<()> {
     if !container_running(container_name)? {
         return Err(BondarError::Docker(format!(
-            "Container {container_name} is not running"
+            "Container {container_name} is not running; run 'bondar up' first"
         )));
     }
 

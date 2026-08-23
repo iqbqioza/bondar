@@ -369,6 +369,9 @@ fn install_in_container(
             if k == "installsAfter" {
                 continue;
             }
+            if v.is_null() {
+                continue;
+            }
             let value = match v {
                 serde_json::Value::String(s) => s.clone(),
                 serde_json::Value::Bool(b) => b.to_string(),

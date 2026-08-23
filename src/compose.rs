@@ -469,10 +469,12 @@ pub fn compose_exec(
     env: Option<&std::collections::HashMap<String, String>>,
     command: &[String],
 ) -> Result<()> {
-    let service = config
-        .service
-        .as_deref()
-        .ok_or_else(|| BondarError::Config("No service".to_string()))?;
+    let service = config.service.as_deref().ok_or_else(|| {
+        BondarError::Config(
+            "'service' must be specified in devcontainer.json when using dockerComposeFile"
+                .to_string(),
+        )
+    })?;
     let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("exec");
     if let Some(u) = user {
