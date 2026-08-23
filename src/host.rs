@@ -258,25 +258,31 @@ pub fn handle_update_remote_user_uid(
 
     // Chown workspace if it exists inside container
     let chown_target = config.workspace_folder_or_default();
-    let chown = std::process::Command::new("docker")
-        .args([
-            "exec",
-            "--user",
-            "root",
-            container_name,
-            "chown",
-            "-R",
-            &format!("{user}:{user}"),
-            &chown_target,
-        ])
-        .output();
-    if let Ok(o) = chown {
-        if o.status.success() {
-            println!("Chowned {chown_target} to {user}");
-        } else {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            if !stderr.contains("No such") {
-                eprintln!("Warning: chown failed: {stderr}");
+    if chown_target == "/" {
+        eprintln!(
+            "Warning: skipping chown of '/' (would alter container-wide ownership); set workspaceFolder to a specific directory"
+        );
+    } else {
+        let chown = std::process::Command::new("docker")
+            .args([
+                "exec",
+                "--user",
+                "root",
+                container_name,
+                "chown",
+                "-R",
+                &format!("{user}:{user}"),
+                &chown_target,
+            ])
+            .output();
+        if let Ok(o) = chown {
+            if o.status.success() {
+                println!("Chowned {chown_target} to {user}");
+            } else {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                if !stderr.contains("No such") {
+                    eprintln!("Warning: chown failed: {stderr}");
+                }
             }
         }
     }

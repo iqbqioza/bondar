@@ -162,10 +162,14 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     merged.insert("mounts".into(), json!(cfg.mounts));
     merged.insert("features".into(), json!(cfg.features));
     merged.insert("containerName".into(), json!(cfg.container_name(ws)));
-    merged.insert(
-        "defaultWorkspaceFolder".into(),
-        json!(cfg.workspace_folder_or_default()),
-    );
+    let default_ws = if cfg.docker_compose_file.is_some() {
+        cfg.workspace_folder
+            .clone()
+            .unwrap_or_else(|| "/".to_string())
+    } else {
+        cfg.workspace_folder_or_default()
+    };
+    merged.insert("defaultWorkspaceFolder".into(), json!(default_ws));
 
     println!("\n--- Merged configuration ---");
     if let Ok(json_str) = serde_json::to_string_pretty(&Value::Object(merged)) {

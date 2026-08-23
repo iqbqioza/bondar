@@ -293,15 +293,14 @@ fn install_in_container(
     exec_cmd.arg("exec");
     // Feature install scripts must run as root by spec; user info is passed via env
     if let Some(user) = container_user {
+        let home = resolve_user_home(container, user);
         exec_cmd.arg("-e").arg(format!("_CONTAINER_USER={user}"));
         exec_cmd.arg("-e").arg(format!("_REMOTE_USER={user}"));
         exec_cmd.arg("-e").arg(format!("_USERNAME={user}"));
         exec_cmd
             .arg("-e")
-            .arg(format!("_CONTAINER_USER_HOME=/home/{user}"));
-        exec_cmd
-            .arg("-e")
-            .arg(format!("_REMOTE_USER_HOME=/home/{user}"));
+            .arg(format!("_CONTAINER_USER_HOME={home}"));
+        exec_cmd.arg("-e").arg(format!("_REMOTE_USER_HOME={home}"));
     }
     exec_cmd.arg(container);
     exec_cmd.arg("sh").arg("-c").arg(format!(
@@ -343,7 +342,6 @@ fn install_in_container(
 }
 
 fn read_feature_metadata(dir: &Path) -> Option<serde_json::Value> {
-    // The spec metadata file is `devcontainer-feature.json` (singular);
     // also accept the plural form for compatibility.
     for name in ["devcontainer-feature.json", "devcontainer-features.json"] {
         let path = dir.join(name);
@@ -354,6 +352,25 @@ fn read_feature_metadata(dir: &Path) -> Option<serde_json::Value> {
         }
     }
     None
+}
+
+/// Resolve the user's home directory inside the container via `getent passwd`,
+/// falling back to `/home/{user}` when unavailable (e.g. no getent).
+fn resolve_user_home(container: &str, user: &str) -> String {
+    std::process::Command::new("docker")
+        .args([
+            "exec",
+            container,
+            "sh",
+            "-c",
+            &format!("getent passwd {user} | cut -d: -f6"),
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("/home/{user}"))
 }
 
 fn install_feature(
