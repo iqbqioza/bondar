@@ -228,6 +228,9 @@ pub fn find_containers_for_workspace(workspace_folder: &Path) -> Result<Vec<Stri
     let label_value = workspace_folder.display().to_string();
     // Docker filters split on ',' and '='; bail out silently for exotic paths
     if label_value.contains(',') || label_value.contains('=') {
+        eprintln!(
+            "Warning: workspace path contains ',' or '='; cannot search for existing containers by label"
+        );
         return Ok(Vec::new());
     }
     let output = Command::new("docker")
