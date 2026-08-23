@@ -208,6 +208,11 @@ impl DevContainerConfig {
                 "'image' and 'build' cannot both be specified".to_string(),
             ));
         }
+        if let Some(n) = &self.name
+            && n.trim().is_empty()
+        {
+            return Err(BondarError::Config("'name' must not be empty".to_string()));
+        }
         if let Some(img) = &self.image
             && img.trim().is_empty()
         {
@@ -590,5 +595,12 @@ mod tests {
         let cfg2: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "remoteEnv": {"": "value"}}"#).unwrap();
         assert!(cfg2.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_empty_name() {
+        let cfg: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "name": ""}"#).unwrap();
+        assert!(cfg.validate().is_err());
     }
 }
