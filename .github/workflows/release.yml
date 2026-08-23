@@ -130,5 +130,6 @@ jobs:
           name: bondar ${{ github.ref_name }}
           body_path: release-notes.md
           files: |
-            artifacts/*/*
+            artifacts/*/bondar*
+            artifacts/SHA256SUMS
           fail_on_unmatched_files: true
