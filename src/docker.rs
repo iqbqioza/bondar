@@ -490,18 +490,24 @@ fn port_value_to_string(p: &crate::config::PortValue) -> String {
 }
 
 pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
-    let Some(attrs) = &config.ports_attributes else {
-        return false;
-    };
     // Determine the container port portion of the spec
     let container_port = port_spec.rsplit(':').next().unwrap_or(port_spec);
-    let Some(entry) = attrs.get(container_port) else {
-        return false;
-    };
-    let Some(obj) = entry.as_object() else {
-        return false;
-    };
-    obj.get("protocol").and_then(|v| v.as_str()) == Some("udp")
+    // Explicit per-port attributes take precedence
+    if let Some(attrs) = &config.ports_attributes
+        && let Some(entry) = attrs.get(container_port)
+        && let Some(obj) = entry.as_object()
+        && obj.get("protocol").and_then(|v| v.as_str()) == Some("udp")
+    {
+        return true;
+    }
+    // Fall back to the default attributes
+    if let Some(other) = &config.other_ports_attributes
+        && let Some(obj) = other.as_object()
+        && obj.get("protocol").and_then(|v| v.as_str()) == Some("udp")
+    {
+        return true;
+    }
+    false
 }
 
 pub fn publish_port_arg(spec: &str) -> Option<String> {

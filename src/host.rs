@@ -345,10 +345,25 @@ pub fn probe_user_env(
         cmd.arg(a);
     }
     let output = cmd.output().ok()?;
-    if !output.status.success() {
+    if output.status.success() {
+        return parse_env_output(&output.stdout);
+    }
+    // Fall back to `sh -c env` when the requested shell (e.g. bash) is missing
+    let mut fallback = std::process::Command::new("docker");
+    fallback.arg("exec");
+    if let Some(u) = user {
+        fallback.arg("--user").arg(u);
+    }
+    fallback.arg(container_name).arg("sh").arg("-c").arg("env");
+    let fb = fallback.output().ok()?;
+    if !fb.status.success() {
         return None;
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_env_output(&fb.stdout)
+}
+
+fn parse_env_output(stdout: &[u8]) -> Option<std::collections::HashMap<String, String>> {
+    let stdout = String::from_utf8_lossy(stdout);
     let mut env = std::collections::HashMap::new();
     for line in stdout.lines() {
         if let Some((k, v)) = line.split_once('=') {

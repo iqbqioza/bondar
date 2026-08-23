@@ -514,6 +514,14 @@ mod tests {
     }
 
     #[test]
+    fn test_mount_string_tmpfs_not_supported() {
+        assert_eq!(
+            mount_string_to_compose_volume("type=tmpfs,target=/data"),
+            None
+        );
+    }
+
+    #[test]
     fn test_escape_yaml_value() {
         assert_eq!(escape_yaml_value("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
         assert_eq!(escape_yaml_value("plain"), "plain");

@@ -322,8 +322,10 @@ fn install_in_container(
         exec_cmd.arg("-e").arg(format!("_REMOTE_USER_HOME={home}"));
     }
     exec_cmd.arg(container);
+    // Normalize CRLF line endings so install.sh does not fail with
+    // "not found" when the file has Windows line endings.
     exec_cmd.arg("sh").arg("-c").arg(format!(
-        "cd {container_path} && chmod +x install.sh && ./install.sh"
+        "cd {container_path} && (sed -i 's/\\r$//' install.sh 2>/dev/null || tr -d '\\r' < install.sh > install.sh.tmp && mv install.sh.tmp install.sh 2>/dev/null || true) && chmod +x install.sh && ./install.sh"
     ));
     // Pass feature options as environment variables
     if let serde_json::Value::Object(map) = opts {

@@ -26,8 +26,12 @@ pub fn run(
         if follow {
             cmd.arg("-f");
         }
-        if let Some(t) = tail {
+        if let Some(t) = &tail
+            && t.parse::<usize>().is_ok()
+        {
             cmd.arg("--tail").arg(t);
+        } else if let Some(t) = &tail {
+            eprintln!("Warning: invalid --tail value '{t}', ignoring");
         }
         if let Some(service) = &cfg.service {
             cmd.arg(service);
@@ -57,8 +61,12 @@ pub fn run(
     if follow {
         cmd.arg("-f");
     }
-    if let Some(t) = tail {
+    if let Some(t) = &tail
+        && t.parse::<usize>().is_ok()
+    {
         cmd.arg("--tail").arg(t);
+    } else if let Some(t) = &tail {
+        eprintln!("Warning: invalid --tail value '{t}', ignoring");
     }
     cmd.arg(&container_name);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
