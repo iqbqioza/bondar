@@ -33,6 +33,9 @@ fn compose_files_args(
         // relative to the devcontainer.json directory.
         let expanded = crate::docker::expand_vars_for_host(&f, workspace_folder);
         let path = config_dir.join(&expanded);
+        if !path.exists() {
+            eprintln!("Warning: compose file not found: {}", path.display());
+        }
         let path_str = path.to_string_lossy().to_string();
         args.push("-f".to_string());
         args.push(path_str);
