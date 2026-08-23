@@ -14,54 +14,27 @@ use cli::{Cli, Commands};
 
 fn main() {
     let cli = Cli::parse();
+    let ws = cli.workspace_folder;
+    let cfg = cli.config;
 
     let result = match cli.command {
-        Commands::Build {
-            workspace_folder,
-            config,
-            no_cache,
-        } => command::build::run(workspace_folder, config, no_cache),
+        Commands::Build { no_cache } => command::build::run(ws, cfg, no_cache),
         Commands::Up {
-            workspace_folder,
-            config,
             remove_existing_container,
             no_build,
             no_cache,
-        } => command::up::run(
-            workspace_folder,
-            config,
-            remove_existing_container,
-            no_build,
-            no_cache,
-        ),
-        Commands::Down {
-            workspace_folder,
-            config,
-        } => command::down::run(workspace_folder, config),
+        } => command::up::run(ws, cfg, remove_existing_container, no_build, no_cache),
+        Commands::Down => command::down::run(ws, cfg),
         Commands::Exec {
-            workspace_folder,
-            config,
             user,
             workdir,
             command,
-        } => command::exec::run(workspace_folder, config, user, workdir, command),
-        Commands::Shell {
-            workspace_folder,
-            config,
-        } => command::shell::run(workspace_folder, config),
-        Commands::Logs {
-            workspace_folder,
-            config,
-            follow,
-            tail,
-        } => command::logs::run(workspace_folder, config, follow, tail),
+        } => command::exec::run(ws, cfg, user, workdir, command),
+        Commands::Shell => command::shell::run(ws, cfg),
+        Commands::Logs { follow, tail } => command::logs::run(ws, cfg, follow, tail),
         Commands::ReadConfiguration {
-            workspace_folder,
-            config,
             include_merged_configuration,
-        } => {
-            command::read_configuration::run(workspace_folder, config, include_merged_configuration)
-        }
+        } => command::read_configuration::run(ws, cfg, include_merged_configuration),
     };
 
     if let Err(e) = result {

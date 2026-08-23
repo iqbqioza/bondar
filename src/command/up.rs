@@ -55,12 +55,7 @@ pub fn run(
     }
 
     let container_name = cfg.container_name(&ws);
-    let was_existing = docker::container_exists(&container_name)?;
-    let was_running = if was_existing {
-        docker::container_running(&container_name)?
-    } else {
-        false
-    };
+    let (was_existing, was_running) = docker::container_exists_and_running(&container_name)?;
 
     // Warn if another container exists for the same workspace (name collision)
     if let Ok(others) = docker::find_containers_for_workspace(&ws) {
@@ -78,7 +73,7 @@ pub fn run(
         lifecycle::execute_host_lifecycle(cmd, &ws)?;
     }
 
-    let image_name = docker::resolve_image_name(&cfg, &cfg_path, &ws)?;
+    let image_name = docker::resolve_image_name(&cfg, &ws)?;
 
     if cfg.build.is_some() && !no_build {
         docker::build_image(&cfg, &cfg_path, &ws, &image_name, no_cache)?;
@@ -99,7 +94,6 @@ pub fn run(
         &cfg.features,
         &cfg.override_feature_install_order,
         Some(&container_name),
-        Some(&ws),
         cfg.remote_user.as_deref(),
     )?;
 
@@ -230,7 +224,7 @@ pub fn run(
         ];
         if !valid.contains(&wait.as_str()) {
             eprintln!("Warning: waitFor '{wait}' is not a valid lifecycle command");
-        } else if wait_idx < 5 {
+        } else if wait_idx != usize::MAX {
             println!("waitFor: {wait} - commands after this run in background");
         }
     }
@@ -336,7 +330,6 @@ fn run_compose(
         &cfg.features,
         &cfg.override_feature_install_order,
         Some(&container_name),
-        Some(ws),
         cfg.remote_user.as_deref(),
     )
     .ok();
@@ -355,8 +348,7 @@ fn run_compose(
             exec_user,
             &workspace_target,
             ws,
-        )
-        .ok();
+        )?;
     }
     if let Some(cmd) = &cfg.update_content_command {
         lifecycle::execute_container_lifecycle(
@@ -365,8 +357,7 @@ fn run_compose(
             exec_user,
             &workspace_target,
             ws,
-        )
-        .ok();
+        )?;
     }
     if let Some(cmd) = &cfg.post_create_command {
         println!("Running postCreateCommand in compose service...");
@@ -376,8 +367,7 @@ fn run_compose(
             exec_user,
             &workspace_target,
             ws,
-        )
-        .ok();
+        )?;
     }
     if let Some(cmd) = &cfg.post_start_command {
         println!("Running postStartCommand in compose service...");
@@ -387,8 +377,7 @@ fn run_compose(
             exec_user,
             &workspace_target,
             ws,
-        )
-        .ok();
+        )?;
     }
     if let Some(cmd) = &cfg.post_attach_command {
         println!("Running postAttachCommand in compose service...");
@@ -398,11 +387,32 @@ fn run_compose(
             exec_user,
             &workspace_target,
             ws,
-        )
-        .ok();
+        )?;
     }
 
     println!("Compose service {service} is up (container {container_name})");
     println!("  Workspace: {}", ws.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wait_index_valid() {
+        assert_eq!(wait_index(&Some("onCreateCommand".to_string())), 0);
+        assert_eq!(wait_index(&Some("postCreateCommand".to_string())), 2);
+        assert_eq!(wait_index(&Some("postStartCommand".to_string())), 3);
+    }
+
+    #[test]
+    fn test_wait_index_invalid_or_missing() {
+        assert_eq!(
+            wait_index(&Some("postAttachCommand".to_string())),
+            usize::MAX
+        );
+        assert_eq!(wait_index(&Some("bogus".to_string())), usize::MAX);
+        assert_eq!(wait_index(&None), usize::MAX);
+    }
 }

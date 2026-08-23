@@ -398,4 +398,41 @@ mod tests {
         assert_eq!(build.context.as_deref(), Some(".."));
         assert_eq!(build.args.get("FOO").map(String::as_str), Some("bar"));
     }
+
+    #[test]
+    fn test_validate_image_build_conflict() {
+        let cfg: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu:22.04", "build": {"dockerfile": "Dockerfile"}}"#,
+        )
+        .unwrap();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_workspace_mount_requires_folder() {
+        let cfg: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu:22.04", "workspaceMount": "type=bind,source=.,target=/x"}"#,
+        )
+        .unwrap();
+        assert!(cfg.validate().is_err());
+
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu:22.04", "workspaceMount": "type=bind,source=.,target=/x", "workspaceFolder": "/x"}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_compose_conflicts() {
+        let cfg: DevContainerConfig = serde_json::from_str(
+            r#"{"dockerComposeFile": "docker-compose.yml", "service": "app", "image": "ubuntu"}"#,
+        )
+        .unwrap();
+        assert!(cfg.validate().is_err());
+
+        let no_service: DevContainerConfig =
+            serde_json::from_str(r#"{"dockerComposeFile": "docker-compose.yml"}"#).unwrap();
+        assert!(no_service.validate().is_err());
+    }
 }

@@ -111,12 +111,8 @@ pub fn build_image(
     Ok(())
 }
 
-pub fn resolve_image_name(
-    config: &DevContainerConfig,
-    config_path: &Path,
-    workspace_folder: &Path,
-) -> Result<String> {
-    if let Some(build) = &config.build {
+pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) -> Result<String> {
+    if config.build.is_some() {
         let base = if let Some(name) = &config.name {
             let sanitized: String = name
                 .chars()
@@ -146,7 +142,6 @@ pub fn resolve_image_name(
                 .collect();
             format!("bondar-{sanitized}")
         };
-        let _ = (config_path, build);
         Ok(base)
     } else if let Some(image) = &config.image {
         Ok(image.clone())
@@ -183,6 +178,31 @@ pub fn container_running(name: &str) -> Result<bool> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.lines().any(|line| line.trim() == name))
+}
+
+/// Single `docker ps -a` call to learn both existence and running state.
+pub fn container_exists_and_running(name: &str) -> Result<(bool, bool)> {
+    let output = Command::new("docker")
+        .args(["ps", "-a", "--format", "{{.Names}}\t{{.Status}}"])
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker ps: {e}")))?;
+
+    if !output.status.success() {
+        return Err(BondarError::Docker("docker ps failed".to_string()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let mut parts = line.split('\t');
+        let Some(n) = parts.next() else {
+            continue;
+        };
+        if n.trim() == name {
+            let status = parts.next().unwrap_or("");
+            return Ok((true, status.starts_with("Up")));
+        }
+    }
+    Ok((false, false))
 }
 
 pub fn find_containers_for_workspace(workspace_folder: &Path) -> Result<Vec<String>> {

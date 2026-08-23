@@ -43,7 +43,6 @@ pub fn handle_features_with_container(
     features: &Option<HashMap<String, serde_json::Value>>,
     override_order: &Option<Vec<String>>,
     container_name: Option<&str>,
-    workspace_folder: Option<&Path>,
     container_user: Option<&str>,
 ) -> Result<()> {
     let Some(feat_map) = features else {
@@ -74,12 +73,12 @@ pub fn handle_features_with_container(
         println!("Installing features in override order:");
         for id in order {
             if let Some(opts) = feat_map.get(id) {
-                install_feature(id, opts, container_name, workspace_folder, container_user)?;
+                install_feature(id, opts, container_name, container_user)?;
             }
         }
         for (id, opts) in feat_map {
             if !order.contains(id) {
-                install_feature(id, opts, container_name, workspace_folder, container_user)?;
+                install_feature(id, opts, container_name, container_user)?;
             }
         }
     } else {
@@ -87,7 +86,7 @@ pub fn handle_features_with_container(
         println!("Installing features in installsAfter order:");
         for id in sorted {
             if let Some(opts) = feat_map.get(&id) {
-                install_feature(&id, opts, container_name, workspace_folder, container_user)?;
+                install_feature(&id, opts, container_name, container_user)?;
             }
         }
     }
@@ -353,7 +352,6 @@ fn install_feature(
     id: &str,
     opts: &serde_json::Value,
     container_name: Option<&str>,
-    _workspace_folder: Option<&Path>,
     container_user: Option<&str>,
 ) -> Result<()> {
     if !id.contains('/') && !id.contains('.') {
@@ -431,9 +429,9 @@ mod tests {
 
     #[test]
     fn test_handle_empty() {
-        assert!(handle_features_with_container(&None, &None, None, None, None).is_ok());
+        assert!(handle_features_with_container(&None, &None, None, None).is_ok());
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
-        assert!(handle_features_with_container(&Some(empty), &None, None, None, None).is_ok());
+        assert!(handle_features_with_container(&Some(empty), &None, None, None).is_ok());
     }
 
     #[test]

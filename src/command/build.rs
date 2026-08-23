@@ -47,7 +47,7 @@ pub fn run(
         return Ok(());
     }
 
-    let image_name = docker::resolve_image_name(&cfg, &cfg_path, &ws)?;
+    let image_name = docker::resolve_image_name(&cfg, &ws)?;
     docker::build_image(&cfg, &cfg_path, &ws, &image_name, no_cache)?;
 
     println!("Build completed: {image_name}");
