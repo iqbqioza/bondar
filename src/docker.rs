@@ -404,7 +404,10 @@ pub fn create_and_start_container(
             crate::config::ForwardPort::Number(n) => n.to_string(),
             crate::config::ForwardPort::Text(s) => s.clone(),
         };
-        if let Some(publish) = publish_port_arg(&port_str) {
+        if let Some(mut publish) = publish_port_arg(&port_str) {
+            if is_udp_port(config, &port_str) {
+                publish.push_str("/udp");
+            }
             cmd.arg("-p").arg(publish);
         } else {
             eprintln!(
@@ -421,7 +424,10 @@ pub fn create_and_start_container(
             }
         };
         for p in ports {
-            if let Some(publish) = publish_port_arg(&p) {
+            if let Some(mut publish) = publish_port_arg(&p) {
+                if is_udp_port(config, &p) {
+                    publish.push_str("/udp");
+                }
                 cmd.arg("-p").arg(publish);
             } else {
                 eprintln!(
@@ -465,6 +471,21 @@ fn port_value_to_string(p: &crate::config::PortValue) -> String {
         crate::config::PortValue::Number(n) => n.to_string(),
         crate::config::PortValue::Text(s) => s.clone(),
     }
+}
+
+pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
+    let Some(attrs) = &config.ports_attributes else {
+        return false;
+    };
+    // Determine the container port portion of the spec
+    let container_port = port_spec.rsplit(':').next().unwrap_or(port_spec);
+    let Some(entry) = attrs.get(container_port) else {
+        return false;
+    };
+    let Some(obj) = entry.as_object() else {
+        return false;
+    };
+    obj.get("protocol").and_then(|v| v.as_str()) == Some("udp")
 }
 
 pub fn publish_port_arg(spec: &str) -> Option<String> {
@@ -806,5 +827,22 @@ mod tests {
     fn test_publish_port_arg_service_name() {
         assert_eq!(publish_port_arg("db:5432"), None);
         assert_eq!(publish_port_arg("not-a-port"), None);
+    }
+
+    #[test]
+    fn test_is_udp_port() {
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(serde_json::json!({
+                "3000": {"protocol": "udp"},
+                "8080": {"protocol": "tcp"}
+            })),
+            ..Default::default()
+        };
+        assert!(is_udp_port(&cfg, "3000"));
+        assert!(is_udp_port(&cfg, "127.0.0.1:3000"));
+        assert!(!is_udp_port(&cfg, "8080"));
+        assert!(!is_udp_port(&cfg, "9090"));
+        let plain = DevContainerConfig::default();
+        assert!(!is_udp_port(&plain, "3000"));
     }
 }

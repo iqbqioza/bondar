@@ -217,6 +217,17 @@ pub fn handle_update_remote_user_uid(
         }
     }
 
+    // Resolve the user's primary group name before groupmod, since the group
+    // may not share the user's name (e.g. user "node" with group "node" vs "users").
+    let primary_group = std::process::Command::new("docker")
+        .args(["exec", container_name, "id", "-g", "-n", user])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+    let group_target = primary_group.as_deref().unwrap_or(user);
+
     let groupmod = std::process::Command::new("docker")
         .args([
             "exec",
@@ -226,18 +237,18 @@ pub fn handle_update_remote_user_uid(
             "groupmod",
             "-g",
             &host_gid.to_string(),
-            user,
+            group_target,
         ])
         .output();
 
     match groupmod {
         Ok(o) if o.status.success() => {
-            println!("Updated GID for {user}");
+            println!("Updated GID for {group_target}");
         }
         Ok(o) => {
             let stderr = String::from_utf8_lossy(&o.stderr);
             if !stderr.contains("no such") {
-                eprintln!("Warning: groupmod failed for {user}: {stderr}");
+                eprintln!("Warning: groupmod failed for {group_target}: {stderr}");
             }
         }
         Err(e) => {

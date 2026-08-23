@@ -96,7 +96,11 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
             crate::config::ForwardPort::Text(s) => s.clone(),
         };
         if let Some(publish) = crate::docker::publish_port_arg(&port_str) {
-            ports.push(format!("\"{publish}\""));
+            if crate::docker::is_udp_port(config, &port_str) {
+                ports.push(format!("\"{publish}/udp\""));
+            } else {
+                ports.push(format!("\"{publish}\""));
+            }
         } else {
             eprintln!(
                 "Warning: forwardPorts '{port_str}' references a service host, cannot publish in compose override"
@@ -112,7 +116,11 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         };
         for p in app_ports {
             if let Some(publish) = crate::docker::publish_port_arg(&p) {
-                ports.push(format!("\"{publish}\""));
+                if crate::docker::is_udp_port(config, &p) {
+                    ports.push(format!("\"{publish}/udp\""));
+                } else {
+                    ports.push(format!("\"{publish}\""));
+                }
             } else {
                 eprintln!(
                     "Warning: appPort '{p}' references a service host, cannot publish in compose override"
@@ -196,7 +204,7 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         wrote_any = true;
         yaml.push_str("    volumes:\n");
         for v in &volumes {
-            yaml.push_str(&format!("      - \"{v}\"\n"));
+            yaml.push_str(&format!("      - \"{}\"\n", escape_yaml_value(v)));
         }
     }
 
