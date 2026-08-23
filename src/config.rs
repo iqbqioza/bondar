@@ -620,4 +620,11 @@ mod tests {
             serde_json::from_str(r#"{"image": "ubuntu", "name": "my-dev"}"#).unwrap();
         assert!(ok.validate().is_ok());
     }
+
+    #[test]
+    fn test_validate_whitespace_name() {
+        let cfg: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "name": "   "}"#).unwrap();
+        assert!(cfg.validate().is_err());
+    }
 }
