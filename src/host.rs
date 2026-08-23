@@ -49,8 +49,15 @@ pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path
                 }
             }
             serde_json::Value::String(s) if s == "optional" => {}
-            serde_json::Value::Object(_) if !has_gpu() => {
-                eprintln!("Warning: hostRequirements.gpu object required but no GPU detected");
+            serde_json::Value::Object(map) => {
+                if !has_gpu() {
+                    eprintln!("Warning: hostRequirements.gpu object required but no GPU detected");
+                }
+                if let Some(mem_str) = map.get("memory").and_then(|v| v.as_str())
+                    && parse_size(mem_str).is_none()
+                {
+                    eprintln!("Warning: invalid hostRequirements.gpu.memory format: {mem_str}");
+                }
             }
             _ => {}
         }

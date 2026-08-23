@@ -152,8 +152,18 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
 }
 
 fn sanitize_id(id: &str) -> String {
+    // Distinguish separators so distinct IDs (e.g. "a/b" vs "a-b") do not
+    // collide into the same directory name.
     id.chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c
+            } else if c == '/' {
+                '-'
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -480,8 +490,13 @@ mod tests {
     fn test_sanitize_id() {
         assert_eq!(
             sanitize_id("ghcr.io/devcontainers/features/common-utils:2"),
-            "ghcr-io-devcontainers-features-common-utils-2"
+            "ghcr_io-devcontainers-features-common_utils_2"
         );
+    }
+
+    #[test]
+    fn test_sanitize_id_no_collision() {
+        assert_ne!(sanitize_id("ghcr.io/a/b"), sanitize_id("ghcr.io/a-b"));
     }
 
     #[test]
