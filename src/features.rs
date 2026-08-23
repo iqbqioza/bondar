@@ -43,13 +43,58 @@ pub fn handle_features(
             }
         }
     } else {
-        println!("Installing features in default order (no installsAfter handling):");
-        for (id, opts) in feat_map {
-            install_feature(id, opts)?;
+        let sorted = sort_by_installs_after(feat_map);
+        println!("Installing features in installsAfter order:");
+        for id in sorted {
+            if let Some(opts) = feat_map.get(&id) {
+                install_feature(&id, opts)?;
+            }
         }
     }
 
     Ok(())
+}
+
+fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<String> {
+    let mut sorted = Vec::new();
+    let mut visiting = std::collections::HashSet::new();
+    let mut visited = std::collections::HashSet::new();
+
+    fn visit(
+        id: &str,
+        feat_map: &HashMap<String, serde_json::Value>,
+        sorted: &mut Vec<String>,
+        visiting: &mut std::collections::HashSet<String>,
+        visited: &mut std::collections::HashSet<String>,
+    ) {
+        if visited.contains(id) {
+            return;
+        }
+        if visiting.contains(id) {
+            eprintln!("Warning: circular installsAfter detected for {id}");
+            return;
+        }
+        visiting.insert(id.to_string());
+        if let Some(opts) = feat_map.get(id)
+            && let Some(arr) = opts.get("installsAfter").and_then(|v| v.as_array())
+        {
+            for dep in arr {
+                if let Some(dep_str) = dep.as_str()
+                    && feat_map.contains_key(dep_str)
+                {
+                    visit(dep_str, feat_map, sorted, visiting, visited);
+                }
+            }
+        }
+        visiting.remove(id);
+        visited.insert(id.to_string());
+        sorted.push(id.to_string());
+    }
+
+    for id in feat_map.keys() {
+        visit(id, feat_map, &mut sorted, &mut visiting, &mut visited);
+    }
+    sorted
 }
 
 fn install_feature(id: &str, _opts: &serde_json::Value) -> Result<()> {

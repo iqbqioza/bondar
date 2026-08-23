@@ -268,7 +268,79 @@ pub fn handle_update_remote_user_uid(
         }
     }
 
+    // Fallback: if usermod failed due to missing user, try useradd
+    let check_after = std::process::Command::new("docker")
+        .args(["exec", container_name, "id", user])
+        .output();
+    if let Ok(o) = check_after
+        && !o.status.success()
+    {
+        eprintln!("Attempting to create user {user} with UID {host_uid}");
+        let useradd = std::process::Command::new("docker")
+            .args([
+                "exec",
+                "--user",
+                "root",
+                container_name,
+                "useradd",
+                "-m",
+                "-u",
+                &host_uid.to_string(),
+                "-g",
+                &host_gid.to_string(),
+                user,
+            ])
+            .output();
+        if let Ok(ua) = useradd {
+            if ua.status.success() {
+                println!("Created user {user}");
+            } else {
+                eprintln!(
+                    "Warning: useradd failed: {}",
+                    String::from_utf8_lossy(&ua.stderr)
+                );
+            }
+        }
+    }
+
     Ok(())
+}
+
+pub fn probe_user_env(
+    container_name: &str,
+    user: Option<&str>,
+    probe: &str,
+) -> Option<std::collections::HashMap<String, String>> {
+    if probe == "none" {
+        return None;
+    }
+    let (shell, args) = match probe {
+        "interactiveShell" => ("bash", vec!["-i", "-c", "env"]),
+        "loginShell" => ("bash", vec!["-l", "-c", "env"]),
+        "loginInteractiveShell" => ("bash", vec!["-l", "-i", "-c", "env"]),
+        _ => ("sh", vec!["-c", "env"]),
+    };
+    let mut cmd = std::process::Command::new("docker");
+    cmd.arg("exec");
+    if let Some(u) = user {
+        cmd.arg("--user").arg(u);
+    }
+    cmd.arg(container_name).arg(shell);
+    for a in args {
+        cmd.arg(a);
+    }
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut env = std::collections::HashMap::new();
+    for line in stdout.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            env.insert(k.to_string(), v.to_string());
+        }
+    }
+    if env.is_empty() { None } else { Some(env) }
 }
 
 fn get_host_uid() -> u32 {

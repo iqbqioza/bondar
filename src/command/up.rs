@@ -86,27 +86,17 @@ pub fn run(
 
     host::handle_update_remote_user_uid(&cfg, &container_name)?;
 
-    if let Some(probe) = &cfg.user_env_probe
+    let probed_env = if let Some(probe) = &cfg.user_env_probe
         && probe != "none"
     {
         println!("Probing user env with {probe}...");
-        let (shell, args) = match probe.as_str() {
-            "interactiveShell" => ("bash", vec!["-i", "-c", "env"]),
-            "loginShell" => ("bash", vec!["-l", "-c", "env"]),
-            "loginInteractiveShell" => ("bash", vec!["-l", "-i", "-c", "env"]),
-            _ => ("sh", vec!["-c", "env"]),
-        };
         let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
-        let mut probe_cmd = std::process::Command::new("docker");
-        probe_cmd.arg("exec");
-        if let Some(u) = exec_user {
-            probe_cmd.arg("--user").arg(u);
-        }
-        probe_cmd.arg(&container_name).arg(shell);
-        for a in args {
-            probe_cmd.arg(a);
-        }
-        let _ = probe_cmd.status();
+        host::probe_user_env(&container_name, exec_user, probe)
+    } else {
+        None
+    };
+    if let Some(env) = &probed_env {
+        println!("Probed {} env vars", env.len());
     }
 
     let workspace_target = cfg.workspace_folder_or_default();
