@@ -14,10 +14,28 @@ pub fn execute_container_lifecycle(
     workdir: &str,
     workspace_folder: &Path,
 ) -> Result<()> {
-    execute_value(
+    execute_container_lifecycle_with_env(
+        value,
+        container_name,
+        user,
+        workdir,
+        workspace_folder,
+        None,
+    )
+}
+
+pub fn execute_container_lifecycle_with_env(
+    value: &serde_json::Value,
+    container_name: &str,
+    user: Option<&str>,
+    workdir: &str,
+    workspace_folder: &Path,
+    env: Option<&std::collections::HashMap<String, String>>,
+) -> Result<()> {
+    execute_value_with_env(
         value,
         workspace_folder,
-        Some((container_name, user, workdir)),
+        Some((container_name, user, workdir, env)),
         None,
     )
 }
@@ -28,9 +46,29 @@ fn execute_value(
     container: Option<(&str, Option<&str>, &str)>,
     _label: Option<&str>,
 ) -> Result<()> {
+    execute_value_with_env(
+        value,
+        workspace_folder,
+        container.map(|(n, u, w)| (n, u, w, None)),
+        _label,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn execute_value_with_env(
+    value: &serde_json::Value,
+    workspace_folder: &Path,
+    container: Option<(
+        &str,
+        Option<&str>,
+        &str,
+        Option<&std::collections::HashMap<String, String>>,
+    )>,
+    _label: Option<&str>,
+) -> Result<()> {
     match value {
         serde_json::Value::String(s) => {
-            execute_single_command(s, &[], true, workspace_folder, container)?;
+            execute_single_command_with_env(s, &[], true, workspace_folder, container)?;
         }
         serde_json::Value::Array(arr) => {
             if arr.is_empty() {
@@ -47,12 +85,12 @@ fn execute_value(
             }
             let cmd = &parts[0];
             let args: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
-            execute_single_command(cmd, &args, false, workspace_folder, container)?;
+            execute_single_command_with_env(cmd, &args, false, workspace_folder, container)?;
         }
         serde_json::Value::Object(map) => {
             for (key, cmd_val) in map {
                 println!("Running lifecycle '{key}'...");
-                execute_value(cmd_val, workspace_folder, container, Some(key))?;
+                execute_value_with_env(cmd_val, workspace_folder, container, Some(key))?;
             }
         }
         serde_json::Value::Null => {}
@@ -65,15 +103,21 @@ fn execute_value(
     Ok(())
 }
 
-fn execute_single_command(
+#[allow(clippy::type_complexity)]
+fn execute_single_command_with_env(
     cmd: &str,
     args: &[&str],
     use_shell: bool,
     workspace_folder: &Path,
-    container: Option<(&str, Option<&str>, &str)>,
+    container: Option<(
+        &str,
+        Option<&str>,
+        &str,
+        Option<&std::collections::HashMap<String, String>>,
+    )>,
 ) -> Result<()> {
-    if let Some((container_name, user, workdir)) = container {
-        execute_in_container(
+    if let Some((container_name, user, workdir, env)) = container {
+        execute_in_container_with_env(
             cmd,
             args,
             use_shell,
@@ -81,6 +125,7 @@ fn execute_single_command(
             user,
             workdir,
             workspace_folder,
+            env,
         )
     } else {
         execute_on_host(cmd, args, use_shell, workspace_folder)
@@ -136,7 +181,9 @@ fn execute_on_host(
     Ok(())
 }
 
-fn execute_in_container(
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+fn execute_in_container_with_env(
     cmd: &str,
     args: &[&str],
     use_shell: bool,
@@ -144,6 +191,7 @@ fn execute_in_container(
     user: Option<&str>,
     workdir: &str,
     workspace_folder: &Path,
+    env: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<()> {
     let expanded_cmd = crate::docker::expand_vars_for_container(cmd, workspace_folder, workdir);
     let expanded_args: Vec<String> = args
@@ -165,6 +213,12 @@ fn execute_in_container(
 
     if !workdir.is_empty() {
         docker_cmd.arg("-w").arg(workdir);
+    }
+
+    if let Some(env_map) = env {
+        for (k, v) in env_map {
+            docker_cmd.arg("-e").arg(format!("{k}={v}"));
+        }
     }
 
     docker_cmd.arg(container_name);

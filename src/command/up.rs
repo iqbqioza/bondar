@@ -102,36 +102,52 @@ pub fn run(
     let workspace_target = cfg.workspace_folder_or_default();
     let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
     let newly_created = !was_existing;
+    let lifecycle_env = {
+        let mut merged = cfg.remote_env.clone();
+        if let Some(probed) = &probed_env {
+            for (k, v) in probed {
+                merged.entry(k.clone()).or_insert(v.clone());
+            }
+        }
+        if merged.is_empty() {
+            None
+        } else {
+            Some(merged)
+        }
+    };
 
     if newly_created {
         if let Some(cmd) = &cfg.on_create_command {
             println!("Running onCreateCommand...");
-            lifecycle::execute_container_lifecycle(
+            lifecycle::execute_container_lifecycle_with_env(
                 cmd,
                 &container_name,
                 exec_user,
                 &workspace_target,
                 &ws,
+                lifecycle_env.as_ref(),
             )?;
         }
         if let Some(cmd) = &cfg.update_content_command {
             println!("Running updateContentCommand...");
-            lifecycle::execute_container_lifecycle(
+            lifecycle::execute_container_lifecycle_with_env(
                 cmd,
                 &container_name,
                 exec_user,
                 &workspace_target,
                 &ws,
+                lifecycle_env.as_ref(),
             )?;
         }
         if let Some(cmd) = &cfg.post_create_command {
             println!("Running postCreateCommand...");
-            lifecycle::execute_container_lifecycle(
+            lifecycle::execute_container_lifecycle_with_env(
                 cmd,
                 &container_name,
                 exec_user,
                 &workspace_target,
                 &ws,
+                lifecycle_env.as_ref(),
             )?;
         }
     }
@@ -139,23 +155,25 @@ pub fn run(
     let should_run_post_start = newly_created || !was_running;
     if should_run_post_start && let Some(cmd) = &cfg.post_start_command {
         println!("Running postStartCommand...");
-        lifecycle::execute_container_lifecycle(
+        lifecycle::execute_container_lifecycle_with_env(
             cmd,
             &container_name,
             exec_user,
             &workspace_target,
             &ws,
+            lifecycle_env.as_ref(),
         )?;
     }
 
     if let Some(cmd) = &cfg.post_attach_command {
         println!("Running postAttachCommand...");
-        lifecycle::execute_container_lifecycle(
+        lifecycle::execute_container_lifecycle_with_env(
             cmd,
             &container_name,
             exec_user,
             &workspace_target,
             &ws,
+            lifecycle_env.as_ref(),
         )?;
     }
 
