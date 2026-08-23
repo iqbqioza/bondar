@@ -373,6 +373,15 @@ pub fn compose_down(
         "down"
     };
 
+    // "stop" fails when no container exists; skip it instead
+    if action == "stop" {
+        let (exists, _) = service_container_state(config, config_path, workspace_folder)?;
+        if !exists {
+            println!("Service container does not exist, skipping 'docker compose stop'");
+            return Ok(());
+        }
+    }
+
     println!("Running 'docker compose {action}'...");
     let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg(action);
