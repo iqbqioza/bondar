@@ -568,9 +568,9 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     if spec.is_empty() {
         return None;
     }
-    // No colon: single port -> host:container with the same number
+    // No colon: single port or range -> host:container with the same spec
     if !spec.contains(':') {
-        if spec.parse::<u16>().is_ok() {
+        if is_port_or_range(spec) {
             return Some(format!("{spec}:{spec}"));
         }
         return None;
@@ -581,8 +581,8 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     // "host:container"
     if rest.len() == 1 {
         let host_is_ip = is_ipv4(first);
-        let host_is_number = first.parse::<u16>().is_ok();
-        let container_ok = rest[0].parse::<u16>().is_ok();
+        let host_is_number = is_port_or_range(first);
+        let container_ok = is_port_or_range(rest[0]);
         if !container_ok {
             // empty or non-numeric container port ("8080:" / "8080:abc")
             return None;
@@ -592,7 +592,7 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
             return Some(format!("{spec}:{}", rest[0]));
         }
         if host_is_number {
-            // "8080:80" -> "8080:80"
+            // "8080:80" -> "8080:80" (also ranges "8080-8085:8080-8085")
             return Some(spec.to_string());
         }
         // "db:5432" -> service host, cannot publish
@@ -601,11 +601,21 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     // "ip:host:container"
     if rest.len() == 2 {
         let ip_ok = is_ipv4(first);
-        if ip_ok && rest[0].parse::<u16>().is_ok() && rest[1].parse::<u16>().is_ok() {
+        if ip_ok && is_port_or_range(rest[0]) && is_port_or_range(rest[1]) {
             return Some(spec.to_string());
         }
     }
     None
+}
+
+fn is_port_or_range(s: &str) -> bool {
+    if s.parse::<u16>().is_ok() {
+        return true;
+    }
+    if let Some((a, b)) = s.split_once('-') {
+        return a.parse::<u16>().is_ok() && b.parse::<u16>().is_ok();
+    }
+    false
 }
 
 fn is_ipv4(s: &str) -> bool {
@@ -956,6 +966,32 @@ mod tests {
         assert!(!is_ipv4("1.2.3"));
         assert!(!is_ipv4("8080"));
         assert!(!is_ipv4("a.b.c.d"));
+    }
+
+    #[test]
+    fn test_publish_port_arg_range() {
+        assert_eq!(
+            publish_port_arg("8080-8085"),
+            Some("8080-8085:8080-8085".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("8080-8085:8080-8085"),
+            Some("8080-8085:8080-8085".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("127.0.0.1:8080-8085"),
+            Some("127.0.0.1:8080-8085:8080-8085".to_string())
+        );
+    }
+
+    #[test]
+    fn test_is_port_or_range() {
+        assert!(is_port_or_range("8080"));
+        assert!(is_port_or_range("8080-8085"));
+        assert!(!is_port_or_range("8080-"));
+        assert!(!is_port_or_range("-8080"));
+        assert!(!is_port_or_range("abc"));
+        assert!(!is_port_or_range("8080-8085-8090"));
     }
 
     #[test]
