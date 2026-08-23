@@ -220,6 +220,8 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         }
         env_lines.push((k, v));
     }
+    // Deterministic output: sort keys so the generated YAML is stable
+    env_lines.sort_by(|a, b| a.0.cmp(&b.0));
     if !env_lines.is_empty() {
         wrote_any = true;
         yaml.push_str("    environment:\n");
