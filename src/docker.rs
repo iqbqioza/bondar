@@ -364,12 +364,14 @@ pub fn create_and_start_container(
     if workspace_folder_str.contains('"') {
         eprintln!("Warning: workspace path contains '\"', which may break docker labels");
     }
+    let config_file_str = config_path.display().to_string();
+    if config_file_str.contains('"') {
+        eprintln!("Warning: config path contains '\"', which may break docker labels");
+    }
     cmd.arg("--label")
         .arg(format!("devcontainer.local_folder={workspace_folder_str}"));
-    cmd.arg("--label").arg(format!(
-        "devcontainer.config_file={}",
-        config_path.display()
-    ));
+    cmd.arg("--label")
+        .arg(format!("devcontainer.config_file={config_file_str}"));
     let devcontainer_id = devcontainer_id_for(workspace_folder);
     cmd.arg("--label")
         .arg(format!("devcontainer.id={devcontainer_id}"));
