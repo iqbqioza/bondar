@@ -114,6 +114,12 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
             crate::config::ForwardPort::Text(s) => s.clone(),
         };
         if let Some(publish) = crate::docker::publish_port_arg(&port_str) {
+            if crate::docker::is_port_ignored(config, &port_str) {
+                println!(
+                    "Skipping forwardPorts '{port_str}' in compose override (onAutoForward: ignore)"
+                );
+                continue;
+            }
             let entry = if crate::docker::is_udp_port(config, &port_str) {
                 format!("\"{publish}/udp\"")
             } else {
@@ -136,6 +142,10 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
             }
         };
         for p in app_ports {
+            if crate::docker::is_port_ignored(config, &p) {
+                println!("Skipping appPort '{p}' in compose override (onAutoForward: ignore)");
+                continue;
+            }
             if let Some(publish) = crate::docker::publish_port_arg(&p) {
                 let entry = if crate::docker::is_udp_port(config, &p) {
                     format!("\"{publish}/udp\"")

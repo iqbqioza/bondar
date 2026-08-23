@@ -438,6 +438,10 @@ pub fn create_and_start_container(
             crate::config::ForwardPort::Number(n) => n.to_string(),
             crate::config::ForwardPort::Text(s) => s.clone(),
         };
+        if is_port_ignored(config, &port_str) {
+            println!("Skipping forwardPorts '{port_str}' (onAutoForward: ignore)");
+            continue;
+        }
         if let Some(mut publish) = publish_port_arg(&port_str) {
             if is_udp_port(config, &port_str) {
                 publish.push_str("/udp");
@@ -458,6 +462,10 @@ pub fn create_and_start_container(
             }
         };
         for p in ports {
+            if is_port_ignored(config, &p) {
+                println!("Skipping appPort '{p}' (onAutoForward: ignore)");
+                continue;
+            }
             if let Some(mut publish) = publish_port_arg(&p) {
                 if is_udp_port(config, &p) {
                     publish.push_str("/udp");
@@ -522,6 +530,25 @@ pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
     if let Some(other) = &config.other_ports_attributes
         && let Some(obj) = other.as_object()
         && obj.get("protocol").and_then(|v| v.as_str()) == Some("udp")
+    {
+        return true;
+    }
+    false
+}
+
+/// Whether `onAutoForward: "ignore"` disables publishing for the port.
+pub fn is_port_ignored(config: &DevContainerConfig, port_spec: &str) -> bool {
+    let container_port = port_spec.rsplit(':').next().unwrap_or(port_spec);
+    if let Some(attrs) = &config.ports_attributes
+        && let Some(entry) = attrs.get(container_port)
+        && let Some(obj) = entry.as_object()
+        && obj.get("onAutoForward").and_then(|v| v.as_str()) == Some("ignore")
+    {
+        return true;
+    }
+    if let Some(other) = &config.other_ports_attributes
+        && let Some(obj) = other.as_object()
+        && obj.get("onAutoForward").and_then(|v| v.as_str()) == Some("ignore")
     {
         return true;
     }
@@ -1015,5 +1042,21 @@ mod tests {
         assert!(!is_udp_port(&cfg, "9090"));
         let plain = DevContainerConfig::default();
         assert!(!is_udp_port(&plain, "3000"));
+    }
+
+    #[test]
+    fn test_is_port_ignored() {
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(serde_json::json!({
+                "3000": {"onAutoForward": "ignore"},
+                "8080": {"onAutoForward": "notify"}
+            })),
+            ..Default::default()
+        };
+        assert!(is_port_ignored(&cfg, "3000"));
+        assert!(is_port_ignored(&cfg, "127.0.0.1:3000"));
+        assert!(!is_port_ignored(&cfg, "8080"));
+        assert!(!is_port_ignored(&cfg, "9090"));
+        assert!(!is_port_ignored(&DevContainerConfig::default(), "3000"));
     }
 }
