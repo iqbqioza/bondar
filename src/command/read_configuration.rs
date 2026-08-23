@@ -120,8 +120,13 @@ pub fn run(
     }
 
     if cfg.docker_compose_file.is_some() {
+        let file_str = match &cfg.docker_compose_file {
+            Some(config::ComposeFileValue::Single(s)) => s.clone(),
+            Some(config::ComposeFileValue::Multiple(v)) => v.join(", "),
+            None => String::new(),
+        };
         println!(
-            "Mode: Docker Compose (service: {})",
+            "Mode: Docker Compose (service: {}, file: {file_str})",
             cfg.service.as_deref().unwrap_or("unknown")
         );
     } else if cfg.build.is_some() {
