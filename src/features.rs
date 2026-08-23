@@ -135,6 +135,7 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
         )?;
         if ok {
             println!("  Fetched feature {id} via oras");
+            ensure_extracted(dest_dir);
             return Ok(());
         }
         eprintln!("  Warning: oras pull failed: {stderr}");
@@ -159,6 +160,38 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
         Err(BondarError::Docker(format!(
             "Unable to fetch feature {id} (no oras, docker pull failed)"
         )))
+    }
+}
+
+/// Some OCI registries return the feature as a tar archive. Expand it so
+/// install.sh is directly accessible under dest_dir.
+fn ensure_extracted(dest_dir: &Path) {
+    if dest_dir.join("install.sh").exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dest_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = entry.file_name().to_str().map(String::from) else {
+            continue;
+        };
+        if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".tar") {
+            println!("  Expanding archive {name}...");
+            let status = std::process::Command::new("tar")
+                .arg("-xf")
+                .arg(&path)
+                .arg("-C")
+                .arg(dest_dir)
+                .status();
+            if let Ok(s) = status
+                && s.success()
+            {
+                println!("  Expanded {name}");
+                let _ = std::fs::remove_file(&path);
+            }
+        }
     }
 }
 

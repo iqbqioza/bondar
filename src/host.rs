@@ -244,7 +244,7 @@ pub fn handle_update_remote_user_uid(
     }
 
     // Chown workspace if it exists inside container
-    let chown_target = "/workspace";
+    let chown_target = config.workspace_folder_or_default();
     let chown = std::process::Command::new("docker")
         .args([
             "exec",
@@ -254,7 +254,7 @@ pub fn handle_update_remote_user_uid(
             "chown",
             "-R",
             &format!("{user}:{user}"),
-            chown_target,
+            &chown_target,
         ])
         .output();
     if let Ok(o) = chown {

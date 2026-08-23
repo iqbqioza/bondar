@@ -152,6 +152,9 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                         &container_target,
                     );
                     vol.push_str(&expanded_target);
+                    if obj.readonly.unwrap_or(false) {
+                        vol.push_str(":ro");
+                    }
                     volumes.push(vol);
                 }
             }
@@ -240,7 +243,13 @@ pub fn compose_up(
     if remove_existing {
         cmd.arg("--force-recreate");
     }
-    if let Some(services) = config.extra.get("runServices").and_then(|v| v.as_array()) {
+    for s in &config.run_services {
+        cmd.arg(s);
+    }
+    if config.run_services.is_empty()
+        && let Some(services) = config.extra.get("runServices").and_then(|v| v.as_array())
+    {
+        // Legacy fallback for configs parsed before run_services existed
         for s in services {
             if let Some(name) = s.as_str() {
                 cmd.arg(name);
@@ -263,24 +272,34 @@ pub fn compose_down(
     config_path: &Path,
     workspace_folder: &Path,
 ) -> Result<()> {
-    let shutdown = config.shutdown_action.as_deref().unwrap_or("stopCompose");
+    // shutdownAction semantics for compose:
+    // - unset (default): tear down services (remove)
+    // - "none": do nothing
+    // - "stopCompose": stop services but keep them
+    let shutdown = config.shutdown_action.as_deref().unwrap_or("remove");
     if shutdown == "none" {
         println!("shutdownAction is 'none', skipping compose down");
         return Ok(());
     }
 
-    println!("Stopping Docker Compose services...");
+    let action = if shutdown == "stopCompose" {
+        "stop"
+    } else {
+        "down"
+    };
+
+    println!("Running 'docker compose {action}'...");
     let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
-    cmd.arg("down");
+    cmd.arg(action);
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     let status = cmd
         .status()
-        .map_err(|e| BondarError::Docker(format!("Failed to run docker compose down: {e}")))?;
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker compose {action}: {e}")))?;
     if !status.success() {
-        return Err(BondarError::Docker(
-            "docker compose down failed".to_string(),
-        ));
+        return Err(BondarError::Docker(format!(
+            "docker compose {action} failed"
+        )));
     }
     Ok(())
 }

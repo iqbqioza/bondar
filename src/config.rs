@@ -23,6 +23,9 @@ pub struct DevContainerConfig {
     #[serde(default)]
     pub service: Option<String>,
 
+    #[serde(rename = "runServices", default)]
+    pub run_services: Vec<String>,
+
     #[serde(rename = "workspaceFolder", default)]
     pub workspace_folder: Option<String>,
 
@@ -168,6 +171,8 @@ pub struct MountObject {
     pub target: Option<String>,
     #[serde(rename = "type", default)]
     pub mount_type: Option<String>,
+    #[serde(default)]
+    pub readonly: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -64,7 +64,8 @@ pub fn build_image(
     cmd.arg("-t").arg(image_name);
 
     for (k, v) in &build.args {
-        cmd.arg("--build-arg").arg(format!("{k}={v}"));
+        let expanded = expand_vars_for_host(v, workspace_folder);
+        cmd.arg("--build-arg").arg(format!("{k}={expanded}"));
     }
 
     if let Some(target) = &build.target {
@@ -228,6 +229,22 @@ pub fn remove_container(name: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn stop_container(name: &str) -> Result<()> {
+    let status = Command::new("docker")
+        .args(["stop", name])
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker stop: {e}")))?;
+
+    if !status.success() {
+        return Err(BondarError::Docker(format!(
+            "Failed to stop container {name}"
+        )));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn create_and_start_container(
     config: &DevContainerConfig,
@@ -359,6 +376,9 @@ pub fn create_and_start_container(
                         "target={}",
                         expand_vars_for_host_with_target(t, workspace_folder, &workspace_target)
                     ));
+                }
+                if obj.readonly.unwrap_or(false) {
+                    parts.push("readonly".to_string());
                 }
                 if !parts.is_empty() {
                     cmd.arg("--mount").arg(parts.join(","));
