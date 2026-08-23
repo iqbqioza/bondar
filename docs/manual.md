@@ -106,7 +106,7 @@ bondar logs [--follow] [--tail <LINES>]
 ```
 
 - `--follow`: follows the log output (`docker logs -f` / `docker compose logs -f`).
-- `--tail <LINES>`: shows only the last N lines (numeric values only).
+- `--tail <LINES>`: shows only the last N lines, or `all` (numeric values or `all`).
 
 ### `bondar read-configuration`
 
@@ -119,7 +119,7 @@ bondar read-configuration [--include-merged-configuration]
 - Prints the resolved configuration (typed fields plus unknown/custom fields).
 - Validates against `devContainer.base.schema.json` (bundled).
 - Exits with code 1 when the configuration is invalid.
-- `--include-merged-configuration`: also prints a merged view (expanded env, secrets, ports, container name, defaults).
+- `--include-merged-configuration`: also prints a merged view (expanded env, secret *names* — values are never printed, container name, defaults).
 
 ## Configuration reference
 
@@ -154,6 +154,8 @@ Constraints enforced by validation:
 - `workspaceMount` requires `workspaceFolder`.
 - Empty strings are rejected for `name`, `image`, `service`, `workspaceFolder`, `build.dockerfile`, `dockerComposeFile`.
 - `containerEnv`/`remoteEnv` keys must not be empty.
+- Object-form `mounts` entries must specify `type` and `target`.
+- `forwardPorts`/`appPort` string forms are validated (port numbers, ranges, `host:container`, IPv6 brackets, `/udp`/`/tcp`).
 
 ### Environment variables
 
@@ -264,7 +266,7 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand` (so lat
 ```
 
 - `dockerComposeFile` may be a string or an array; paths are relative to `devcontainer.json`, and `${localWorkspaceFolder}` expands to the workspace root.
-- `runServices` limits the services started.
+- `runServices` starts additional services on top of the primary `service`, which is always started.
 - `containerEnv`, `secrets`, `forwardPorts`, `appPort` and `mounts` are injected via a generated `compose.override.yml` (in the OS temp directory).
 - `--remove-existing-container` passes `--force-recreate`; `--no-build` passes `--no-build`.
 - Each workspace gets a stable per-workspace compose project name (`bondar-<hash>`), so workspaces with the same directory name never share containers, networks or override files.

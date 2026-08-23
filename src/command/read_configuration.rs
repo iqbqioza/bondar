@@ -64,9 +64,13 @@ pub fn run(
         }
     };
 
-    let json = serde_json::to_string_pretty(&cfg).unwrap_or_else(|_| "{}".to_string());
-    println!("{json}");
-    println!();
+    // Print the resolved configuration; when the typed parse failed there is
+    // nothing meaningful to print beyond the raw input.
+    if typed_ok {
+        let json = serde_json::to_string_pretty(&cfg).unwrap_or_else(|_| "{}".to_string());
+        println!("{json}");
+        println!();
+    }
 
     let summary = crate::lifecycle::lifecycle_summary(&cfg);
     if !summary.is_empty() {

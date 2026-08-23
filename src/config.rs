@@ -519,6 +519,12 @@ pub fn load_config(
 }
 
 pub fn strip_json_comments(input: &str) -> String {
+    let stripped = strip_comment_tokens(input);
+    strip_trailing_commas(&stripped)
+}
+
+/// Remove `//` line and `/* */` block comments, preserving string contents.
+fn strip_comment_tokens(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     let mut in_string = false;
@@ -568,7 +574,39 @@ pub fn strip_json_comments(input: &str) -> String {
             }
         }
 
-        // JSONC allows trailing commas before '}' or ']' (e.g. "key": "v",)
+        output.push(c);
+    }
+
+    output
+}
+
+/// JSONC allows trailing commas before '}' or ']' (e.g. "key": "v",).
+/// Runs after comment removal so a comma followed by a comment is also handled.
+fn strip_trailing_commas(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(c) = chars.next() {
+        if in_string {
+            output.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if c == '"' {
+            in_string = true;
+            output.push(c);
+            continue;
+        }
+
         if c == ',' {
             let mut lookahead = chars.clone();
             if let Some(nc) = lookahead.find(|&x| !x.is_whitespace())
@@ -1016,6 +1054,21 @@ mod tests {
         let stripped = strip_json_comments(input);
         let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
         assert_eq!(v["text"], "a, } b,");
+    }
+
+    #[test]
+    fn test_strip_trailing_comma_before_comment() {
+        // Very common JSONC pattern: the last entry has a trailing comma
+        // followed by a comment.
+        let input = "{\n  \"image\": \"ubuntu:22.04\", // last entry\n}";
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(v["image"], "ubuntu:22.04");
+
+        let input2 = "{\n  \"image\": \"ubuntu:22.04\", /* c */\n}";
+        let stripped2 = strip_json_comments(input2);
+        let v2: serde_json::Value = serde_json::from_str(&stripped2).unwrap();
+        assert_eq!(v2["image"], "ubuntu:22.04");
     }
 
     #[test]

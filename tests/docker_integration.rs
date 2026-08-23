@@ -548,6 +548,56 @@ fn test_build_no_cache() {
 }
 
 #[test]
+fn test_compose_run_services_includes_primary() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-runsvc");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n    volumes:\n      - .:/workspace\n  db:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-runsvc", "dockerComposeFile": "../docker-compose.yml", "service": "app", "runServices": ["db"], "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "compose up with runServices failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    // The primary service must be running even though runServices only lists "db"
+    let exec = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--",
+        "sh",
+        "-c",
+        "echo primary-ok",
+    ]);
+    assert!(
+        exec.status.success(),
+        "primary service did not start: {}",
+        String::from_utf8_lossy(&exec.stderr)
+    );
+    assert!(String::from_utf8_lossy(&exec.stdout).contains("primary-ok"));
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
+
+#[test]
 fn test_read_configuration_merged() {
     let ws = make_workspace(
         "merged",

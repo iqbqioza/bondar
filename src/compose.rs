@@ -45,9 +45,11 @@ fn compose_files_args(
         if !path.exists() {
             eprintln!("Warning: compose file not found: {}", path.display());
         }
-        let path_str = path.to_string_lossy().to_string();
+        let path_str = path.to_str().ok_or_else(|| {
+            BondarError::Config("Compose file path is not valid UTF-8".to_string())
+        })?;
         args.push("-f".to_string());
-        args.push(path_str);
+        args.push(path_str.to_string());
     }
     Ok(args)
 }
@@ -386,7 +388,13 @@ pub fn compose_up(
     if no_build {
         cmd.arg("--no-build");
     }
+    // The primary service is always started (it is the dev container itself);
+    // runServices adds further services on top.
     let mut seen_services = std::collections::HashSet::new();
+    if let Some(primary) = &config.service {
+        seen_services.insert(primary.clone());
+        cmd.arg(primary);
+    }
     for s in &config.run_services {
         if seen_services.insert(s.clone()) {
             cmd.arg(s);

@@ -587,8 +587,11 @@ pub fn validate_port_spec(s: &str) -> std::result::Result<(), String> {
             return Err("unterminated IPv6 address".to_string());
         };
         let rest = &s[end + 1..];
-        let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
-        if parts.is_empty() || parts.len() > 2 {
+        let Some((_, ports_part)) = rest.split_once(':') else {
+            return Err("invalid IPv6 port form".to_string());
+        };
+        let parts: Vec<&str> = ports_part.split(':').collect();
+        if parts.is_empty() || parts.len() > 2 || parts.iter().any(|p| p.is_empty()) {
             return Err("invalid IPv6 port form".to_string());
         }
         for p in parts {
@@ -600,12 +603,43 @@ pub fn validate_port_spec(s: &str) -> std::result::Result<(), String> {
     let parts: Vec<&str> = s.split(':').collect();
     match parts.len() {
         1 => validate_container_port(parts[0]),
-        2 => validate_container_port(parts[1]),
+        2 => {
+            // Validate the container side; validate the host side too when it
+            // is a numeric port/range ("0" = random host port is allowed)
+            validate_host_port(parts[0])?;
+            validate_container_port(parts[1])
+        }
         3 => {
-            validate_container_port(parts[1])?;
+            validate_host_port(parts[1])?;
             validate_container_port(parts[2])
         }
         _ => Err("too many ':' in port specification".to_string()),
+    }
+}
+
+fn validate_host_port(p: &str) -> std::result::Result<(), String> {
+    // Service names and IP addresses are not numeric ports - nothing to check
+    if p.is_empty() || !p.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return Ok(());
+    }
+    if p == "0" {
+        return Ok(());
+    }
+    if let Some((a, b)) = p.split_once('-') {
+        let a: u16 = a
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid host port or range"))?;
+        let b: u16 = b
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid host port or range"))?;
+        if a > b {
+            return Err(format!("host port range '{p}' is reversed"));
+        }
+        Ok(())
+    } else {
+        p.parse::<u16>()
+            .map(|_| ())
+            .map_err(|_| format!("'{p}' is not a valid host port"))
     }
 }
 
@@ -635,6 +669,29 @@ fn validate_container_port(p: &str) -> std::result::Result<(), String> {
     }
 }
 
+/// Look up a `portsAttributes`/`otherPortsAttributes` entry for a container
+/// port. Matches the exact key first, then range keys (e.g. "8080-8085" for
+/// port 8080). Regex keys are not evaluated (no process list available).
+fn attributes_entry<'a>(
+    attrs: &'a serde_json::Value,
+    container_port: &str,
+) -> Option<&'a serde_json::Value> {
+    if let Some(entry) = attrs.get(container_port) {
+        return Some(entry);
+    }
+    let port_num: u32 = container_port.parse().ok()?;
+    for (key, entry) in attrs.as_object()? {
+        if let Some((a, b)) = key.split_once('-')
+            && let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>())
+            && port_num >= a
+            && port_num <= b
+        {
+            return Some(entry);
+        }
+    }
+    None
+}
+
 pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
     // Determine the container port portion of the spec (strip /udp suffix)
     let container_port = port_spec
@@ -644,7 +701,7 @@ pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
         .trim_end_matches("/udp");
     // Explicit per-port attributes take precedence
     if let Some(attrs) = &config.ports_attributes
-        && let Some(entry) = attrs.get(container_port)
+        && let Some(entry) = attributes_entry(attrs, container_port)
         && let Some(obj) = entry.as_object()
         && obj.get("protocol").and_then(|v| v.as_str()) == Some("udp")
     {
@@ -668,7 +725,7 @@ pub fn is_port_ignored(config: &DevContainerConfig, port_spec: &str) -> bool {
         .unwrap_or(port_spec)
         .trim_end_matches("/udp");
     if let Some(attrs) = &config.ports_attributes
-        && let Some(entry) = attrs.get(container_port)
+        && let Some(entry) = attributes_entry(attrs, container_port)
         && let Some(obj) = entry.as_object()
         && obj.get("onAutoForward").and_then(|v| v.as_str()) == Some("ignore")
     {
@@ -703,7 +760,13 @@ fn publish_ipv6_arg(spec: &str) -> Option<String> {
         return None;
     }
     let rest = &spec[end + 1..];
-    let ports: Vec<&str> = rest.split(':').filter(|s| !s.is_empty()).collect();
+    // Rest is ":ports"; split off the leading separator and reject any
+    // additional empty segment (e.g. "[::1]:8080:").
+    let (_, ports_part) = rest.split_once(':')?;
+    let ports: Vec<&str> = ports_part.split(':').collect();
+    if ports.iter().any(|p| p.is_empty()) {
+        return None;
+    }
     match ports.len() {
         1 => {
             if is_port_or_range(ports[0]) {
@@ -876,9 +939,10 @@ fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
     input.replace("${devcontainerId}", &id)
 }
 
-/// Resolve `${containerEnv:KEY}` references against the raw `containerEnv`
-/// entries (bounded recursion, cycle-safe). Unmatched or self-referential keys
-/// are left untouched and fall through to `expand_container_env_vars` (host env).
+/// Resolve `${containerEnv:KEY}` (and `${containerEnv:KEY:default}`) references
+/// against the raw `containerEnv` entries (bounded recursion, cycle-safe).
+/// Unmatched or self-referential keys are left untouched and fall through to
+/// `expand_container_env_vars` (host env / default).
 pub fn resolve_container_env_value(input: &str, raw: &HashMap<String, String>) -> String {
     let mut result = input.to_string();
     for _ in 0..10 {
@@ -889,11 +953,40 @@ pub fn resolve_container_env_value(input: &str, raw: &HashMap<String, String>) -
                 result = result.replace(&pat, v);
                 changed = true;
             }
+            // Default form: ${containerEnv:KEY:default}
+            let pat_default = format!("${{containerEnv:{k}:");
+            if result.contains(&pat_default) {
+                result = replace_container_env_default(&result, k, v);
+                changed = true;
+            }
         }
         if !changed {
             break;
         }
     }
+    result
+}
+
+/// Replace `${containerEnv:KEY:...}` occurrences (up to the matching '}') with
+/// the map value, so the map wins over the default.
+fn replace_container_env_default(input: &str, key: &str, value: &str) -> String {
+    let prefix = format!("${{containerEnv:{key}:");
+    let mut result = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find(&prefix) {
+        result.push_str(&rest[..pos]);
+        let after = &rest[pos + prefix.len()..];
+        if let Some(end) = after.find('}') {
+            result.push_str(value);
+            rest = &after[end + 1..];
+        } else {
+            // Unterminated reference: keep the text as-is
+            result.push_str(&prefix);
+            rest = after;
+            break;
+        }
+    }
+    result.push_str(rest);
     result
 }
 
@@ -1271,6 +1364,16 @@ mod tests {
             resolve_container_env_value("${containerEnv:B}", &raw),
             "x-y"
         );
+        // Default form resolves against the map value, not the default
+        assert_eq!(
+            resolve_container_env_value("${containerEnv:A:fallback}", &raw),
+            "x"
+        );
+        // Unmatched keys keep the default for the generic expansion
+        assert_eq!(
+            resolve_container_env_value("${containerEnv:C:fallback}", &raw),
+            "${containerEnv:C:fallback}"
+        );
         // Self-reference is left untouched (falls through to host env)
         assert_eq!(
             resolve_container_env_value("${containerEnv:C}", &raw),
@@ -1282,6 +1385,59 @@ mod tests {
             ("Y".to_string(), "${containerEnv:X}".to_string()),
         ]);
         let _ = resolve_container_env_value("${containerEnv:X}", &cyclic);
+    }
+
+    #[test]
+    fn test_validate_port_spec_host_side() {
+        assert!(validate_port_spec("0:8080").is_ok());
+        assert!(validate_port_spec("65535:65535").is_ok());
+        // Host-side reversed range is rejected
+        assert!(validate_port_spec("8085-8080:8080").is_err());
+        // Host-side out-of-range is rejected
+        assert!(validate_port_spec("70000:8080").is_err());
+        // Service names pass
+        assert!(validate_port_spec("db:5432").is_ok());
+        // IPv6 forms with stray colons are rejected
+        assert!(validate_port_spec("[::1]:8080:").is_err());
+        assert!(validate_port_spec("[::1]:8080:80:").is_err());
+        assert!(validate_port_spec("[::1]").is_err());
+    }
+
+    #[test]
+    fn test_publish_ipv6_trailing_colon_rejected() {
+        assert_eq!(publish_port_arg("[::1]:8080:"), None);
+        assert_eq!(publish_port_arg("[::1]:8080:80:"), None);
+    }
+
+    #[test]
+    fn test_attributes_entry_range_key() {
+        let attrs = serde_json::json!({
+            "8080-8085": {"protocol": "udp"}
+        });
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(attrs),
+            ..Default::default()
+        };
+        // Port inside the range matches the range key
+        assert!(is_udp_port(&cfg, "8082"));
+        assert!(is_udp_port(&cfg, "8080"));
+        assert!(is_udp_port(&cfg, "8085"));
+        // Outside the range does not match
+        assert!(!is_udp_port(&cfg, "8086"));
+        assert!(!is_udp_port(&cfg, "8079"));
+    }
+
+    #[test]
+    fn test_is_port_ignored_range_key() {
+        let attrs = serde_json::json!({
+            "9000-9010": {"onAutoForward": "ignore"}
+        });
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(attrs),
+            ..Default::default()
+        };
+        assert!(is_port_ignored(&cfg, "9005"));
+        assert!(!is_port_ignored(&cfg, "9011"));
     }
 
     #[test]
