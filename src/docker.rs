@@ -1214,4 +1214,16 @@ mod tests {
             std::env::remove_var("BONDAR_TEST_ENV_VAR");
         }
     }
+
+    #[test]
+    fn test_publish_port_arg_udp_suffix() {
+        assert_eq!(
+            publish_port_arg("8080:8080/udp"),
+            Some("8080:8080/udp".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("8080/udp"),
+            Some("8080:8080/udp".to_string())
+        );
+    }
 }

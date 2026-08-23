@@ -294,9 +294,10 @@ fn escape_yaml_value(input: &str) -> String {
 }
 
 fn escape_yaml_key(input: &str) -> String {
-    if input
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    if !input.is_empty()
+        && input
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
     {
         input.to_string()
     } else {
@@ -535,6 +536,7 @@ pub fn check_compose_available() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MountObject;
     use std::collections::HashMap;
 
     #[test]
@@ -617,6 +619,60 @@ mod tests {
     fn test_escape_yaml_key() {
         assert_eq!(escape_yaml_key("MY_VAR-1"), "MY_VAR-1");
         assert_eq!(escape_yaml_key("weird key"), "\"weird key\"");
+        assert_eq!(escape_yaml_key(""), "\"\"");
+        assert_eq!(escape_yaml_key("123"), "123");
+        assert_eq!(escape_yaml_key("key:with:colon"), "\"key:with:colon\"");
+    }
+
+    #[test]
+    fn test_write_compose_override_ports_and_volumes() {
+        let dir = std::env::temp_dir().join("bondar-ovr-test3");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            forward_ports: vec![crate::config::ForwardPort::Number(8080)],
+            mounts: vec![MountValue::Object(MountObject {
+                source: Some("/host".to_string()),
+                target: Some("/data".to_string()),
+                mount_type: Some("bind".to_string()),
+                readonly: Some(true),
+            })],
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        assert!(!path.as_os_str().is_empty());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("- \"8080:8080\""));
+        assert!(content.contains("- \"/host:/data:ro\""));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_compose_override_secrets() {
+        let dir = std::env::temp_dir().join("bondar-ovr-test4");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("BONDAR_TEST_OVR_SECRET", "sv");
+        }
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            secrets: Some(HashMap::from([(
+                "SEC".to_string(),
+                serde_json::json!({"localEnv": "BONDAR_TEST_OVR_SECRET"}),
+            )])),
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("SEC: \"sv\""));
+        unsafe {
+            std::env::remove_var("BONDAR_TEST_OVR_SECRET");
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

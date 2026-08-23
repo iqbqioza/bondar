@@ -638,6 +638,15 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_mounts_ok() {
+        let cfg: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"type": "bind", "source": "/a", "target": "/b", "readonly": true}, {"type": "volume", "target": "/c"}]}"#,
+        )
+        .unwrap();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
     fn test_container_name_uppercase() {
         let cfg = DevContainerConfig {
             name: Some("MyProject".to_string()),

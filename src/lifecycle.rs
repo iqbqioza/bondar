@@ -332,4 +332,25 @@ mod tests {
         assert_eq!(summary.len(), 2);
         assert!(summary.contains(&"initializeCommand".to_string()));
     }
+
+    #[test]
+    fn test_lifecycle_summary_all() {
+        let cfg = crate::config::DevContainerConfig {
+            initialize_command: Some(json!("a")),
+            on_create_command: Some(json!("b")),
+            update_content_command: Some(json!("c")),
+            post_create_command: Some(json!("d")),
+            post_start_command: Some(json!("e")),
+            post_attach_command: Some(json!("f")),
+            ..Default::default()
+        };
+        let summary = lifecycle_summary(&cfg);
+        assert_eq!(summary.len(), 6);
+    }
+
+    #[test]
+    fn test_lifecycle_summary_empty() {
+        let cfg = crate::config::DevContainerConfig::default();
+        assert!(lifecycle_summary(&cfg).is_empty());
+    }
 }

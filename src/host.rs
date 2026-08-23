@@ -556,6 +556,18 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_size_edge() {
+        assert_eq!(
+            parse_size("0.5gb"),
+            Some((0.5 * 1024.0 * 1024.0 * 1024.0) as u64)
+        );
+        assert_eq!(parse_size("1kb"), Some(1024));
+        assert_eq!(parse_size("10b"), None);
+        assert_eq!(parse_size("gb"), None);
+        assert_eq!(parse_size(""), None);
+    }
+
+    #[test]
     fn test_parse_id_output_empty() {
         assert_eq!(parse_id_output("", "uid="), None);
         assert_eq!(parse_id_output("uid=", "uid="), None);

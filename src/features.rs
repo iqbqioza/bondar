@@ -532,6 +532,14 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_id_special_and_unicode() {
+        assert_eq!(sanitize_id("a b@c"), "a_b_c");
+        // Unicode alphanumerics are preserved
+        assert_eq!(sanitize_id("日本語"), "日本語");
+        assert_ne!(sanitize_id("ghcr.io/a/b"), sanitize_id("ghcr.io/a_b"));
+    }
+
+    #[test]
     fn test_feature_cache_dir() {
         let dir = feature_cache_dir();
         assert!(dir.starts_with(&std::env::temp_dir()));
