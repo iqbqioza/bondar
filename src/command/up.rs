@@ -93,6 +93,8 @@ pub fn run(
 
     if cfg.build.is_some() && !no_build {
         docker::build_image(&cfg, &cfg_path, &ws, &image_name, no_cache)?;
+    } else if cfg.build.is_some() {
+        println!("Skipping image build (--no-build)");
     }
 
     docker::create_and_start_container(

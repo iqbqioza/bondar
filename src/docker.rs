@@ -841,11 +841,11 @@ pub fn exec_in_container(
 
 pub fn get_workspace_folder(provided: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = provided {
-        if p.exists() {
+        if p.is_dir() {
             return Ok(p.canonicalize()?);
         }
         return Err(BondarError::NotFound(format!(
-            "Workspace folder not found: {}",
+            "Workspace folder not found or not a directory: {}",
             p.display()
         )));
     }

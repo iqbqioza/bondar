@@ -498,4 +498,26 @@ mod tests {
             serde_json::from_str(r#"{"dockerComposeFile": "docker-compose.yml"}"#).unwrap();
         assert!(no_service.validate().is_err());
     }
+
+    #[test]
+    fn test_validate_empty_strings() {
+        let empty_image: DevContainerConfig = serde_json::from_str(r#"{"image": ""}"#).unwrap();
+        assert!(empty_image.validate().is_err());
+
+        let empty_dockerfile: DevContainerConfig =
+            serde_json::from_str(r#"{"build": {"dockerfile": ""}}"#).unwrap();
+        assert!(empty_dockerfile.validate().is_err());
+
+        let empty_ws: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "workspaceFolder": ""}"#).unwrap();
+        assert!(empty_ws.validate().is_err());
+
+        let empty_compose: DevContainerConfig =
+            serde_json::from_str(r#"{"dockerComposeFile": "", "service": "app"}"#).unwrap();
+        assert!(empty_compose.validate().is_err());
+
+        let empty_service: DevContainerConfig =
+            serde_json::from_str(r#"{"dockerComposeFile": "c.yml", "service": ""}"#).unwrap();
+        assert!(empty_service.validate().is_err());
+    }
 }

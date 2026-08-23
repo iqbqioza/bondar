@@ -125,7 +125,12 @@ pub fn run(
             cfg.service.as_deref().unwrap_or("unknown")
         );
     } else if cfg.build.is_some() {
-        println!("Mode: Build");
+        let dockerfile = cfg
+            .build
+            .as_ref()
+            .and_then(|b| b.dockerfile.as_deref())
+            .unwrap_or("Dockerfile");
+        println!("Mode: Build (dockerfile: {dockerfile})");
     } else {
         println!(
             "Mode: Image ({})",
