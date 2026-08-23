@@ -531,6 +531,13 @@ mod tests {
     }
 
     #[test]
+    fn test_feature_cache_dir() {
+        let dir = feature_cache_dir();
+        assert!(dir.starts_with(&std::env::temp_dir()));
+        assert_eq!(dir.file_name().unwrap(), "bondar_features");
+    }
+
+    #[test]
     fn test_sanitize_id_no_collision() {
         assert_ne!(sanitize_id("ghcr.io/a/b"), sanitize_id("ghcr.io/a-b"));
     }
