@@ -55,6 +55,11 @@ pub fn run(
     }
 
     let container_name = cfg.container_name(&ws);
+    if container_name.len() > 255 {
+        eprintln!(
+            "Warning: container name '{container_name}' exceeds Docker's 255 character limit; 'docker run' may fail"
+        );
+    }
     let (was_existing, was_running) = docker::container_exists_and_running(&container_name)?;
 
     // Warn if another container exists for the same workspace (name collision)
@@ -101,13 +106,19 @@ pub fn run(
     let merged_custom = crate::features::collect_feature_customizations(&cfg.features);
     if !merged_custom.as_object().is_none_or(|m| m.is_empty()) {
         let json_str = serde_json::to_string(&merged_custom).unwrap_or_default();
-        let _ = std::process::Command::new("docker")
-            .args([
-                "label",
-                &container_name,
-                &format!("devcontainer.feature_customizations={json_str}"),
-            ])
-            .status();
+        let label_arg = format!("devcontainer.feature_customizations={json_str}");
+        // `docker update --label-add` is supported broadly; fall back to
+        // `docker label` (Docker 25+) for stopped containers.
+        let ok = std::process::Command::new("docker")
+            .args(["update", "--label-add", &label_arg, &container_name])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok {
+            let _ = std::process::Command::new("docker")
+                .args(["label", &container_name, &label_arg])
+                .status();
+        }
         println!("Merged feature customizations stored on container label");
     }
 
@@ -304,7 +315,7 @@ fn run_compose(
         // Force rebuild with no cache for compose
         let mut build_cmd = std::process::Command::new("docker");
         build_cmd.arg("compose");
-        for arg in crate::compose::compose_files_args_for_build(cfg, cfg_path)? {
+        for arg in crate::compose::compose_files_args_for_build(cfg, cfg_path, ws)? {
             build_cmd.arg(arg);
         }
         build_cmd.arg("build").arg("--no-cache");

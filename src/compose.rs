@@ -7,11 +7,16 @@ use crate::error::{BondarError, Result};
 pub fn compose_files_args_for_build(
     config: &DevContainerConfig,
     config_path: &Path,
+    workspace_folder: &Path,
 ) -> Result<Vec<String>> {
-    compose_files_args(config, config_path)
+    compose_files_args(config, config_path, workspace_folder)
 }
 
-fn compose_files_args(config: &DevContainerConfig, config_path: &Path) -> Result<Vec<String>> {
+fn compose_files_args(
+    config: &DevContainerConfig,
+    config_path: &Path,
+    workspace_folder: &Path,
+) -> Result<Vec<String>> {
     let compose_val = config
         .docker_compose_file
         .as_ref()
@@ -23,7 +28,10 @@ fn compose_files_args(config: &DevContainerConfig, config_path: &Path) -> Result
     };
     let mut args = Vec::new();
     for f in files {
-        let expanded = crate::docker::expand_vars_for_host(&f, config_dir);
+        // Variable expansion is relative to the workspace root
+        // (e.g. ${localWorkspaceFolder}), while path resolution is
+        // relative to the devcontainer.json directory.
+        let expanded = crate::docker::expand_vars_for_host(&f, workspace_folder);
         let path = config_dir.join(&expanded);
         let path_str = path.to_string_lossy().to_string();
         args.push("-f".to_string());
@@ -228,7 +236,7 @@ fn compose_base_command(
 ) -> Result<Command> {
     let mut cmd = Command::new("docker");
     cmd.arg("compose");
-    for arg in compose_files_args(config, config_path)? {
+    for arg in compose_files_args(config, config_path, workspace_folder)? {
         cmd.arg(arg);
     }
     if let Ok(override_path) = write_compose_override(config, workspace_folder)

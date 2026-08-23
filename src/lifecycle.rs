@@ -1,10 +1,21 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
 use crate::error::{BondarError, Result};
 
+/// Parameters for executing a command inside the dev container.
+#[derive(Clone, Copy)]
+pub struct ContainerExec<'a> {
+    pub container_name: &'a str,
+    pub user: Option<&'a str>,
+    pub workdir: &'a str,
+    pub workspace_folder: &'a Path,
+    pub env: Option<&'a HashMap<String, String>>,
+}
+
 pub fn execute_host_lifecycle(value: &serde_json::Value, workspace_folder: &Path) -> Result<()> {
-    execute_value(value, workspace_folder, None, None)
+    execute_value_with_env(value, workspace_folder, None, None)
 }
 
 pub fn execute_container_lifecycle(
@@ -30,40 +41,22 @@ pub fn execute_container_lifecycle_with_env(
     user: Option<&str>,
     workdir: &str,
     workspace_folder: &Path,
-    env: Option<&std::collections::HashMap<String, String>>,
+    env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
-    execute_value_with_env(
-        value,
+    let exec = ContainerExec {
+        container_name,
+        user,
+        workdir,
         workspace_folder,
-        Some((container_name, user, workdir, env)),
-        None,
-    )
+        env,
+    };
+    execute_value_with_env(value, workspace_folder, Some(&exec), None)
 }
 
-fn execute_value(
-    value: &serde_json::Value,
-    workspace_folder: &Path,
-    container: Option<(&str, Option<&str>, &str)>,
-    _label: Option<&str>,
-) -> Result<()> {
-    execute_value_with_env(
-        value,
-        workspace_folder,
-        container.map(|(n, u, w)| (n, u, w, None)),
-        _label,
-    )
-}
-
-#[allow(clippy::type_complexity)]
 fn execute_value_with_env(
     value: &serde_json::Value,
     workspace_folder: &Path,
-    container: Option<(
-        &str,
-        Option<&str>,
-        &str,
-        Option<&std::collections::HashMap<String, String>>,
-    )>,
+    container: Option<&ContainerExec<'_>>,
     _label: Option<&str>,
 ) -> Result<()> {
     match value {
@@ -103,30 +96,15 @@ fn execute_value_with_env(
     Ok(())
 }
 
-#[allow(clippy::type_complexity)]
 fn execute_single_command_with_env(
     cmd: &str,
     args: &[&str],
     use_shell: bool,
     workspace_folder: &Path,
-    container: Option<(
-        &str,
-        Option<&str>,
-        &str,
-        Option<&std::collections::HashMap<String, String>>,
-    )>,
+    container: Option<&ContainerExec<'_>>,
 ) -> Result<()> {
-    if let Some((container_name, user, workdir, env)) = container {
-        execute_in_container_with_env(
-            cmd,
-            args,
-            use_shell,
-            container_name,
-            user,
-            workdir,
-            workspace_folder,
-            env,
-        )
+    if let Some(exec) = container {
+        execute_in_container_with_env(cmd, args, use_shell, exec)
     } else {
         execute_on_host(cmd, args, use_shell, workspace_folder)
     }
@@ -181,28 +159,13 @@ fn execute_on_host(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
 fn execute_in_container_with_env(
     cmd: &str,
     args: &[&str],
     use_shell: bool,
-    container_name: &str,
-    user: Option<&str>,
-    workdir: &str,
-    workspace_folder: &Path,
-    env: Option<&std::collections::HashMap<String, String>>,
+    exec: &ContainerExec<'_>,
 ) -> Result<()> {
-    let mut docker_cmd = build_container_command(
-        cmd,
-        args,
-        use_shell,
-        container_name,
-        user,
-        workdir,
-        workspace_folder,
-        env,
-    )?;
+    let mut docker_cmd = build_container_command(cmd, args, use_shell, exec)?;
     docker_cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
     let status = docker_cmd
@@ -225,33 +188,22 @@ pub fn spawn_container_lifecycle(
     user: Option<&str>,
     workdir: &str,
     workspace_folder: &Path,
-    env: Option<&std::collections::HashMap<String, String>>,
+    env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
-    spawn_container_value(value, container_name, user, workdir, workspace_folder, env)
+    let exec = ContainerExec {
+        container_name,
+        user,
+        workdir,
+        workspace_folder,
+        env,
+    };
+    spawn_container_value(value, &exec)
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
-fn spawn_container_value(
-    value: &serde_json::Value,
-    container_name: &str,
-    user: Option<&str>,
-    workdir: &str,
-    workspace_folder: &Path,
-    env: Option<&std::collections::HashMap<String, String>>,
-) -> Result<()> {
+fn spawn_container_value(value: &serde_json::Value, exec: &ContainerExec<'_>) -> Result<()> {
     match value {
         serde_json::Value::String(s) => {
-            spawn_container_command(
-                s,
-                &[],
-                true,
-                container_name,
-                user,
-                workdir,
-                workspace_folder,
-                env,
-            )?;
+            spawn_container_command(s, &[], true, exec)?;
         }
         serde_json::Value::Array(arr) => {
             if arr.is_empty() {
@@ -268,28 +220,12 @@ fn spawn_container_value(
             }
             let cmd = &parts[0];
             let args: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
-            spawn_container_command(
-                cmd,
-                &args,
-                false,
-                container_name,
-                user,
-                workdir,
-                workspace_folder,
-                env,
-            )?;
+            spawn_container_command(cmd, &args, false, exec)?;
         }
         serde_json::Value::Object(map) => {
             for (key, cmd_val) in map {
                 println!("Spawning lifecycle '{key}' in background...");
-                spawn_container_value(
-                    cmd_val,
-                    container_name,
-                    user,
-                    workdir,
-                    workspace_folder,
-                    env,
-                )?;
+                spawn_container_value(cmd_val, exec)?;
             }
         }
         serde_json::Value::Null => {}
@@ -302,32 +238,18 @@ fn spawn_container_value(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
 fn spawn_container_command(
     cmd: &str,
     args: &[&str],
     use_shell: bool,
-    container_name: &str,
-    user: Option<&str>,
-    workdir: &str,
-    workspace_folder: &Path,
-    env: Option<&std::collections::HashMap<String, String>>,
+    exec: &ContainerExec<'_>,
 ) -> Result<()> {
     println!(
-        "Spawning in container {container_name} (background): {cmd} {}",
+        "Spawning in container {} (background): {cmd} {}",
+        exec.container_name,
         args.join(" ")
     );
-    let mut docker_cmd = build_container_command(
-        cmd,
-        args,
-        use_shell,
-        container_name,
-        user,
-        workdir,
-        workspace_folder,
-        env,
-    )?;
+    let mut docker_cmd = build_container_command(cmd, args, use_shell, exec)?;
     docker_cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     docker_cmd
         .spawn()
@@ -335,42 +257,37 @@ fn spawn_container_command(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::type_complexity)]
 fn build_container_command(
     cmd: &str,
     args: &[&str],
     use_shell: bool,
-    container_name: &str,
-    user: Option<&str>,
-    workdir: &str,
-    workspace_folder: &Path,
-    env: Option<&std::collections::HashMap<String, String>>,
+    exec: &ContainerExec<'_>,
 ) -> Result<Command> {
-    let expanded_cmd = crate::docker::expand_vars_for_container(cmd, workspace_folder, workdir);
+    let expanded_cmd =
+        crate::docker::expand_vars_for_container(cmd, exec.workspace_folder, exec.workdir);
     let expanded_args: Vec<String> = args
         .iter()
-        .map(|a| crate::docker::expand_vars_for_container(a, workspace_folder, workdir))
+        .map(|a| crate::docker::expand_vars_for_container(a, exec.workspace_folder, exec.workdir))
         .collect();
 
     let mut docker_cmd = Command::new("docker");
     docker_cmd.arg("exec");
 
-    if let Some(u) = user {
+    if let Some(u) = exec.user {
         docker_cmd.arg("--user").arg(u);
     }
 
-    if !workdir.is_empty() {
-        docker_cmd.arg("-w").arg(workdir);
+    if !exec.workdir.is_empty() {
+        docker_cmd.arg("-w").arg(exec.workdir);
     }
 
-    if let Some(env_map) = env {
+    if let Some(env_map) = exec.env {
         for (k, v) in env_map {
             docker_cmd.arg("-e").arg(format!("{k}={v}"));
         }
     }
 
-    docker_cmd.arg(container_name);
+    docker_cmd.arg(exec.container_name);
 
     if use_shell {
         let full = if expanded_args.is_empty() {

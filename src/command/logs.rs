@@ -19,7 +19,7 @@ pub fn run(
     if cfg.docker_compose_file.is_some() {
         let mut cmd = Command::new("docker");
         cmd.arg("compose");
-        for arg in crate::compose::compose_files_args_for_build(&cfg, &cfg_path)? {
+        for arg in crate::compose::compose_files_args_for_build(&cfg, &cfg_path, &ws)? {
             cmd.arg(arg);
         }
         cmd.arg("logs");

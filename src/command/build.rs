@@ -20,7 +20,7 @@ pub fn run(
 
         let mut build_cmd = std::process::Command::new("docker");
         build_cmd.arg("compose");
-        for arg in crate::compose::compose_files_args_for_build(&cfg, &cfg_path)? {
+        for arg in crate::compose::compose_files_args_for_build(&cfg, &cfg_path, &ws)? {
             build_cmd.arg(arg);
         }
         build_cmd.arg("build");

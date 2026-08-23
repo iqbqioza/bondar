@@ -73,7 +73,8 @@ pub fn build_image(
     }
 
     for opt in &build.options {
-        cmd.arg(opt);
+        let expanded = expand_vars_for_host(opt, workspace_folder);
+        cmd.arg(&expanded);
     }
 
     if let Some(cache_from) = &build.cache_from {
