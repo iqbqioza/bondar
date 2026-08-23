@@ -41,5 +41,46 @@ Then:
 
 ```sh
 bondar build --workspace-folder ./sample
+bondar build --workspace-folder ./sample --no-cache
 bondar up --workspace-folder ./sample
 ```
+
+## Lifecycle (implemented)
+
+```json
+{
+  "initializeCommand": "echo init on host",
+  "onCreateCommand": "echo onCreate inside container",
+  "updateContentCommand": ["echo", "update"],
+  "postCreateCommand": {"step1": "echo hello", "step2": ["echo", "world"]},
+  "postStartCommand": "echo start",
+  "postAttachCommand": "echo attach"
+}
+```
+
+- `initializeCommand` runs on host (`workspaceFolder` as cwd)
+- `onCreate`/`updateContent`/`postCreate` run only on first `up` (new container)
+- `postStart` runs when container was stopped then started
+- `postAttach` runs on every `up`
+
+String => `sh -c`, Array => direct exec, Object => sequential per key.
+
+## Env and variables
+
+```json
+{
+  "containerEnv": {"FOO": "${localEnv:HOME}"},
+  "remoteEnv": {"BAR": "${containerWorkspaceFolder}"},
+  "runArgs": ["--label", "my=${localEnv:VAR}"]
+}
+```
+
+Supported expansions: `${localWorkspaceFolder}`, `${localWorkspaceFolderBasename}`, `${containerWorkspaceFolder}`, `${containerWorkspaceFolderBasename}`, `${localEnv:VAR:default}`, `${containerEnv:VAR:default}`, `${devcontainerId}`.
+Labels `devcontainer.local_folder`, `devcontainer.config_file`, `devcontainer.id` are auto-added to `docker run`.
+
+## Not yet fully supported
+
+- `features` / `overrideFeatureInstallOrder` -> warning only
+- `dockerComposeFile` -> error (use `image`/`build`)
+- `hostRequirements` / `updateRemoteUserUID` / `shutdownAction` -> warning
+- `portsAttributes` -> ignored (only `forwardPorts` publish)

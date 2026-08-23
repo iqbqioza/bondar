@@ -71,6 +71,36 @@ pub struct DevContainerConfig {
     #[serde(rename = "init", default)]
     pub init: Option<bool>,
 
+    #[serde(rename = "initializeCommand", default)]
+    pub initialize_command: Option<serde_json::Value>,
+
+    #[serde(rename = "onCreateCommand", default)]
+    pub on_create_command: Option<serde_json::Value>,
+
+    #[serde(rename = "updateContentCommand", default)]
+    pub update_content_command: Option<serde_json::Value>,
+
+    #[serde(rename = "postCreateCommand", default)]
+    pub post_create_command: Option<serde_json::Value>,
+
+    #[serde(rename = "postStartCommand", default)]
+    pub post_start_command: Option<serde_json::Value>,
+
+    #[serde(rename = "postAttachCommand", default)]
+    pub post_attach_command: Option<serde_json::Value>,
+
+    #[serde(rename = "waitFor", default)]
+    pub wait_for: Option<String>,
+
+    #[serde(rename = "shutdownAction", default)]
+    pub shutdown_action: Option<String>,
+
+    #[serde(rename = "updateRemoteUserUID", default)]
+    pub update_remote_user_uid: Option<bool>,
+
+    #[serde(rename = "hostRequirements", default)]
+    pub host_requirements: Option<serde_json::Value>,
+
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }

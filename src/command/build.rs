@@ -7,7 +7,7 @@ use crate::error::Result;
 pub fn run(
     workspace_folder: Option<PathBuf>,
     config_path: Option<PathBuf>,
-    _no_cache: bool,
+    no_cache: bool,
 ) -> Result<()> {
     docker::check_docker_available()?;
 
@@ -24,7 +24,7 @@ pub fn run(
     }
 
     let image_name = docker::resolve_image_name(&cfg, &cfg_path, &ws)?;
-    docker::build_image(&cfg, &cfg_path, &ws, &image_name)?;
+    docker::build_image(&cfg, &cfg_path, &ws, &image_name, no_cache)?;
 
     println!("Build completed: {image_name}");
     Ok(())

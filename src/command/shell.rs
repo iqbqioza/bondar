@@ -24,11 +24,18 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi".to_string(),
     ];
 
+    let remote_env = if cfg.remote_env.is_empty() {
+        None
+    } else {
+        Some(&cfg.remote_env)
+    };
     docker::exec_in_container(
         &container_name,
         user.as_deref(),
         workdir.as_deref(),
         &shell_cmd,
+        remote_env,
+        Some(&ws),
     )?;
 
     Ok(())

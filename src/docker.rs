@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -27,6 +28,7 @@ pub fn build_image(
     config_path: &Path,
     workspace_folder: &Path,
     image_name: &str,
+    no_cache: bool,
 ) -> Result<()> {
     let build = config
         .build
@@ -84,6 +86,10 @@ pub fn build_image(
                 }
             }
         }
+    }
+
+    if no_cache {
+        cmd.arg("--no-cache");
     }
 
     cmd.arg(&context_str);
@@ -198,6 +204,7 @@ pub fn remove_container(name: &str) -> Result<()> {
 pub fn create_and_start_container(
     config: &DevContainerConfig,
     workspace_folder: &Path,
+    config_path: &Path,
     container_name: &str,
     image_name: &str,
     remove_existing: bool,
@@ -252,12 +259,32 @@ pub fn create_and_start_container(
     }
 
     for run_arg in &config.run_args {
-        cmd.arg(run_arg);
+        let expanded = expand_vars_for_host(run_arg, workspace_folder);
+        cmd.arg(&expanded);
     }
+
+    // Labels for tracking
+    cmd.arg("--label")
+        .arg(format!("devcontainer.local_folder={workspace_folder_str}"));
+    cmd.arg("--label").arg(format!(
+        "devcontainer.config_file={}",
+        config_path.display()
+    ));
+    let devcontainer_id = {
+        let ws_str = workspace_folder.to_string_lossy().to_string();
+        let mut hash: u64 = 14695981039346656037;
+        for b in ws_str.bytes() {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(1099511628211);
+        }
+        format!("{hash:016x}")
+    };
+    cmd.arg("--label")
+        .arg(format!("devcontainer.id={devcontainer_id}"));
 
     // Workspace mount
     if let Some(mount) = &config.workspace_mount {
-        let expanded = expand_vars(mount, workspace_folder);
+        let expanded = expand_vars_for_host(mount, workspace_folder);
         cmd.arg("--mount").arg(&expanded);
     } else {
         let mount = format!(
@@ -293,9 +320,14 @@ pub fn create_and_start_container(
         }
     }
 
-    // Env
+    // Env - containerEnv and remoteEnv (both set as -e for now)
     for (k, v) in &config.container_env {
-        cmd.arg("-e").arg(format!("{k}={v}"));
+        let expanded_v = expand_vars_for_host(v, workspace_folder);
+        cmd.arg("-e").arg(format!("{k}={expanded_v}"));
+    }
+    for (k, v) in &config.remote_env {
+        let expanded_v = expand_vars_for_host(v, workspace_folder);
+        cmd.arg("-e").arg(format!("{k}={expanded_v}"));
     }
 
     // Publish / forward ports
@@ -363,6 +395,10 @@ fn port_value_to_string(p: &crate::config::PortValue) -> String {
 }
 
 fn expand_vars(input: &str, workspace_folder: &Path) -> String {
+    expand_vars_for_host(input, workspace_folder)
+}
+
+pub fn expand_vars_for_host(input: &str, workspace_folder: &Path) -> String {
     let mut result = input.to_string();
     let ws = workspace_folder.to_string_lossy().to_string();
     let basename = workspace_folder
@@ -370,13 +406,101 @@ fn expand_vars(input: &str, workspace_folder: &Path) -> String {
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_string();
+    let container_ws = "/workspace".to_string();
 
     result = result.replace("${localWorkspaceFolder}", &ws);
     result = result.replace("${localWorkspaceFolderBasename}", &basename);
-    result = result.replace("${containerWorkspaceFolder}", "/workspace");
+    result = result.replace("${containerWorkspaceFolder}", &container_ws);
+    result = result.replace("${containerWorkspaceFolderBasename}", "workspace");
 
-    // Expand ${localEnv:VAR} with env var
     result = expand_local_env_vars(&result);
+    result = expand_container_env_vars(&result);
+    result = expand_devcontainer_id(&result, workspace_folder);
+    result
+}
+
+pub fn expand_vars_for_container(
+    input: &str,
+    workspace_folder: &Path,
+    container_workspace: &str,
+) -> String {
+    let mut result = input.to_string();
+    let ws = workspace_folder.to_string_lossy().to_string();
+    let basename = workspace_folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let container_basename = container_workspace
+        .rsplit('/')
+        .next()
+        .unwrap_or("workspace")
+        .to_string();
+
+    result = result.replace("${localWorkspaceFolder}", &ws);
+    result = result.replace("${localWorkspaceFolderBasename}", &basename);
+    result = result.replace("${containerWorkspaceFolder}", container_workspace);
+    result = result.replace("${containerWorkspaceFolderBasename}", &container_basename);
+
+    result = expand_local_env_vars(&result);
+    result = expand_container_env_vars(&result);
+    result = expand_devcontainer_id(&result, workspace_folder);
+    result
+}
+
+fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
+    if !input.contains("${devcontainerId}") {
+        return input.to_string();
+    }
+    let ws_str = workspace_folder.to_string_lossy().to_string();
+    let mut hash: u64 = 14695981039346656037;
+    for b in ws_str.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    let id = format!("{hash:016x}");
+    input.replace("${devcontainerId}", &id)
+}
+
+fn expand_container_env_vars(input: &str) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '$' && chars.peek() == Some(&'{') {
+            chars.next();
+            let mut var_content = String::new();
+            let mut found_end = false;
+            for nc in chars.by_ref() {
+                if nc == '}' {
+                    found_end = true;
+                    break;
+                }
+                var_content.push(nc);
+            }
+            if found_end && var_content.starts_with("containerEnv:") {
+                let rest = &var_content["containerEnv:".len()..];
+                let (var_name, default_val) = if let Some(colon_pos) = rest.find(':') {
+                    (&rest[..colon_pos], Some(&rest[colon_pos + 1..]))
+                } else {
+                    (rest, None)
+                };
+                let env_val = std::env::var(var_name)
+                    .unwrap_or_else(|_| default_val.unwrap_or("").to_string());
+                result.push_str(&env_val);
+            } else if found_end {
+                result.push_str("${");
+                result.push_str(&var_content);
+                result.push('}');
+            } else {
+                result.push_str("${");
+                result.push_str(&var_content);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
     result
 }
 
@@ -427,6 +551,8 @@ pub fn exec_in_container(
     user: Option<&str>,
     workdir: Option<&str>,
     command: &[String],
+    env: Option<&HashMap<String, String>>,
+    workspace_folder: Option<&Path>,
 ) -> Result<()> {
     if !container_running(container_name)? {
         return Err(BondarError::Docker(format!(
@@ -448,6 +574,17 @@ pub fn exec_in_container(
 
     if let Some(w) = workdir {
         cmd.arg("-w").arg(w);
+    }
+
+    if let Some(env_map) = env {
+        for (k, v) in env_map {
+            let expanded_v = if let Some(ws) = workspace_folder {
+                expand_vars_for_host(v, ws)
+            } else {
+                v.clone()
+            };
+            cmd.arg("-e").arg(format!("{k}={expanded_v}"));
+        }
     }
 
     cmd.arg(container_name);

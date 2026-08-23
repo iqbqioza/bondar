@@ -3,6 +3,7 @@ mod command;
 mod config;
 mod docker;
 mod error;
+mod lifecycle;
 
 use clap::Parser;
 

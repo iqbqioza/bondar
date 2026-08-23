@@ -22,11 +22,18 @@ pub fn run(
         .or_else(|| cfg.container_user.clone());
     let exec_workdir = workdir.or(cfg.workspace_folder.clone());
 
+    let remote_env = if cfg.remote_env.is_empty() {
+        None
+    } else {
+        Some(&cfg.remote_env)
+    };
     docker::exec_in_container(
         &container_name,
         exec_user.as_deref(),
         exec_workdir.as_deref(),
         &command,
+        remote_env,
+        Some(&ws),
     )?;
 
     Ok(())
