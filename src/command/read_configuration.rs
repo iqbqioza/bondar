@@ -1,8 +1,12 @@
 use std::path::PathBuf;
 
+use jsonschema::Validator;
+
 use crate::config;
 use crate::docker;
 use crate::error::Result;
+
+static SCHEMA_JSON: &str = include_str!("../schemas/devcontainer.schema.json");
 
 pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<()> {
     let ws = docker::get_workspace_folder(workspace_folder)?;
@@ -45,12 +49,32 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         }
     }
 
-    // Validation
+    // Strict JSON Schema validation against the official devcontainer schema.
+    // Validate the raw file contents (after comment stripping), not the
+    // serialized struct which contains all fields including nulls.
+    let mut errors: Vec<String> = Vec::new();
+    let raw = std::fs::read_to_string(&cfg_path).map_err(crate::error::BondarError::Io)?;
+    let stripped = crate::config::strip_json_comments(&raw);
+    let raw_value: serde_json::Value = serde_json::from_str(&stripped)
+        .map_err(|e| crate::error::BondarError::Config(format!("Invalid JSON: {e}")))?;
+
+    let schema: serde_json::Value = serde_json::from_str(SCHEMA_JSON)
+        .map_err(|e| crate::error::BondarError::Config(format!("Schema parse error: {e}")))?;
+    let validator = Validator::options()
+        .with_draft(jsonschema::Draft::Draft201909)
+        .build(&schema)
+        .map_err(|e| crate::error::BondarError::Config(format!("Schema build error: {e}")))?;
+
+    for e in validator.iter_errors(&raw_value) {
+        errors.push(format!("  {}: {}", e.instance_path, e));
+    }
+
+    // Additional cross-field validation
     if cfg.image.is_none() && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
-        eprintln!("Warning: No image/build/dockerComposeFile specified");
+        errors.push("  No image/build/dockerComposeFile specified".to_string());
     }
     if cfg.docker_compose_file.is_some() && cfg.service.is_none() {
-        eprintln!("Warning: dockerComposeFile requires service");
+        errors.push("  dockerComposeFile requires service".to_string());
     }
     if let Some(wait) = &cfg.wait_for {
         let valid = [
@@ -62,8 +86,18 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             "postAttachCommand",
         ];
         if !valid.contains(&wait.as_str()) {
-            eprintln!("Warning: waitFor '{wait}' is invalid");
+            errors.push(format!("  waitFor '{wait}' is invalid"));
         }
+    }
+
+    if errors.is_empty() {
+        println!("\nConfiguration is valid (schema: devContainer.base.schema.json)");
+    } else {
+        println!("\nConfiguration errors ({}):", errors.len());
+        for e in &errors {
+            eprintln!("{e}");
+        }
+        eprintln!("Configuration is INVALID");
     }
 
     if cfg.docker_compose_file.is_some() {
@@ -80,6 +114,5 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         );
     }
 
-    println!("\nConfiguration is valid");
     Ok(())
 }

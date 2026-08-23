@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{BondarError, Result};
 
 #[allow(dead_code)]
 pub fn handle_features(
@@ -14,7 +15,7 @@ pub fn handle_features_with_container(
     features: &Option<HashMap<String, serde_json::Value>>,
     override_order: &Option<Vec<String>>,
     container_name: Option<&str>,
-    workspace_folder: Option<&std::path::Path>,
+    workspace_folder: Option<&Path>,
 ) -> Result<()> {
     let Some(feat_map) = features else {
         return Ok(());
@@ -107,30 +108,189 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
     sorted
 }
 
-fn install_feature(
-    id: &str,
-    opts: &serde_json::Value,
-    container_name: Option<&str>,
-    _workspace_folder: Option<&std::path::Path>,
-) -> Result<()> {
-    if !id.contains('/') && !id.contains('.') {
-        eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
-        return Ok(());
-    }
+fn sanitize_id(id: &str) -> String {
+    id.chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect()
+}
 
-    // Try to handle via OCI if `oras` is available, otherwise fallback to docker pull attempt
+fn run_output(cmd: &mut std::process::Command, desc: &str) -> Result<(bool, String)> {
+    let output = cmd
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to run {desc}: {e}")))?;
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    Ok((output.status.success(), stderr))
+}
+
+fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
     let has_oras = std::process::Command::new("oras")
         .arg("version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
 
+    if has_oras {
+        println!("  Using 'oras' to fetch OCI artifact");
+        let (ok, stderr) = run_output(
+            std::process::Command::new("oras").args([
+                "pull",
+                id,
+                "--output",
+                dest_dir.to_str().unwrap_or("/tmp"),
+            ]),
+            &format!("oras pull {id}"),
+        )?;
+        if ok {
+            println!("  Fetched feature {id} via oras");
+            return Ok(());
+        }
+        eprintln!("  Warning: oras pull failed: {stderr}");
+        return Err(BondarError::Docker(format!("oras pull failed for {id}")));
+    }
+
+    // Fallback: docker pull (works for features that are also container images)
+    let feature_image = id.split(':').next().unwrap_or(id);
+    println!("  Trying 'docker pull {feature_image}' as fallback");
+    let (ok, stderr) = run_output(
+        std::process::Command::new("docker").args(["pull", feature_image]),
+        "docker pull",
+    )?;
+    if ok {
+        println!("  Pulled feature image {feature_image}");
+        Ok(())
+    } else {
+        eprintln!(
+            "  Note: docker pull failed for {feature_image}: {}",
+            stderr.lines().next().unwrap_or("")
+        );
+        Err(BondarError::Docker(format!(
+            "Unable to fetch feature {id} (no oras, docker pull failed)"
+        )))
+    }
+}
+
+fn copy_feature_into_container(
+    host_dir: &Path,
+    container: &str,
+    container_path: &str,
+) -> Result<()> {
+    let (ok, stderr) = run_output(
+        std::process::Command::new("docker").args([
+            "exec",
+            container,
+            "sh",
+            "-c",
+            &format!("mkdir -p {container_path}"),
+        ]),
+        &format!("mkdir in {container}"),
+    )?;
+    if !ok {
+        eprintln!("  Warning: mkdir failed: {stderr}");
+    }
+
+    let (ok, stderr) = run_output(
+        std::process::Command::new("docker").args([
+            "cp",
+            host_dir.to_str().unwrap_or(""),
+            &format!("{container}:{container_path}/"),
+        ]),
+        "docker cp",
+    )?;
+    if !ok {
+        return Err(BondarError::Docker(format!("docker cp failed: {stderr}")));
+    }
+    Ok(())
+}
+
+fn install_in_container(
+    id: &str,
+    opts: &serde_json::Value,
+    container: &str,
+    container_path: &str,
+    container_user: Option<&str>,
+) -> Result<()> {
+    let script_path = format!("{container_path}/install.sh");
+    let (found, _) = run_output(
+        std::process::Command::new("docker").args([
+            "exec",
+            container,
+            "sh",
+            "-c",
+            &format!("test -f {script_path} && echo yes"),
+        ]),
+        "check install.sh",
+    )?;
+    if !found {
+        eprintln!("  Warning: install.sh not found at {script_path}, skipping execution");
+        return Ok(());
+    }
+
+    println!("  Found install.sh, executing inside {container}...");
+    let mut exec_cmd = std::process::Command::new("docker");
+    exec_cmd.arg("exec");
+    if let Some(user) = container_user {
+        exec_cmd.arg("--user").arg(user);
+    }
+    exec_cmd.arg(container);
+    exec_cmd.arg("sh").arg("-c").arg(format!(
+        "cd {container_path} && chmod +x install.sh && ./install.sh"
+    ));
+    // Pass feature options as environment variables
+    if let serde_json::Value::Object(map) = opts {
+        for (k, v) in map {
+            let value = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Number(n) => n.to_string(),
+                _ => v.to_string(),
+            };
+            exec_cmd.arg("-e").arg(format!("{k}={value}"));
+        }
+    }
+    if let Some(user) = container_user {
+        exec_cmd.arg("-e").arg(format!("_CONTAINER_USER={user}"));
+        exec_cmd.arg("-e").arg(format!("_REMOTE_USER={user}"));
+        exec_cmd.arg("-e").arg(format!("_USERNAME={user}"));
+    }
+
+    let (ok, stderr) = run_output(&mut exec_cmd, "install.sh")?;
+    if ok {
+        println!("  Feature {id} installed successfully");
+    } else {
+        eprintln!("  Warning: install.sh failed for {id}: {stderr}");
+    }
+
+    // Cleanup the copied files inside the container
+    let _ = run_output(
+        std::process::Command::new("docker").args([
+            "exec",
+            container,
+            "sh",
+            "-c",
+            &format!("rm -rf {container_path}"),
+        ]),
+        "cleanup",
+    );
+
+    Ok(())
+}
+
+fn install_feature(
+    id: &str,
+    opts: &serde_json::Value,
+    container_name: Option<&str>,
+    _workspace_folder: Option<&Path>,
+) -> Result<()> {
+    if !id.contains('/') && !id.contains('.') {
+        eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
+        return Ok(());
+    }
+
     let has_docker = std::process::Command::new("docker")
         .arg("version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-
     if !has_docker {
         eprintln!("Warning: docker not available, cannot install feature '{id}'");
         return Ok(());
@@ -138,89 +298,26 @@ fn install_feature(
 
     println!("Attempting to install feature '{id}' with opts {opts}...");
 
-    if has_oras {
-        println!("  Using 'oras' to fetch OCI artifact (if available)");
-        let output = std::process::Command::new("oras")
-            .args(["pull", id, "--output", "/tmp/bondar_features"])
-            .output();
-        if let Ok(o) = output {
-            if o.status.success() {
-                println!("  Fetched feature {id} via oras");
-            } else {
-                eprintln!(
-                    "  Warning: oras pull failed for {id}: {}",
-                    String::from_utf8_lossy(&o.stderr)
-                );
-            }
-        }
-    } else {
-        // Fallback: try docker pull for GHCR features that are also Docker images (some are)
-        let feature_image = id.split(':').next().unwrap_or(id);
-        println!("  Trying 'docker pull {feature_image}' as fallback");
-        let output = std::process::Command::new("docker")
-            .args(["pull", feature_image])
-            .output();
-        if let Ok(o) = output {
-            if o.status.success() {
-                println!("  Pulled feature image {feature_image}");
-            } else {
-                eprintln!(
-                    "  Note: docker pull failed for {feature_image} (expected for pure OCI features): {}",
-                    String::from_utf8_lossy(&o.stderr)
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                );
-            }
-        }
+    let dest_dir = std::path::PathBuf::from("/tmp/bondar_features").join(sanitize_id(id));
+    if let Err(e) = fetch_feature(id, &dest_dir) {
+        eprintln!("  Warning: could not fetch feature {id}: {e}");
+        return Ok(());
     }
 
     if let Some(container) = container_name {
-        // Try to execute install.sh inside the container if it exists
-        // Features are expected to be at /tmp/bondar_features or already in container
-        let check = std::process::Command::new("docker")
-            .args(["exec", container, "sh", "-c", "ls /tmp/bondar_features/install.sh 2>/dev/null || ls /usr/local/share/devcontainers/features/*/install.sh 2>/dev/null | head -1"])
-            .output();
-        if let Ok(o) = check
-            && o.status.success()
-        {
-            let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if !path.is_empty() {
-                println!("  Found install script at {path}, executing...");
-                let install = std::process::Command::new("docker")
-                    .args([
-                        "exec",
-                        container,
-                        "sh",
-                        "-c",
-                        &format!("chmod +x {path} && {path}"),
-                    ])
-                    .output();
-                if let Ok(io) = install {
-                    if io.status.success() {
-                        println!("  Feature {id} installed successfully");
-                    } else {
-                        eprintln!(
-                            "  Warning: install.sh failed for {id}: {}",
-                            String::from_utf8_lossy(&io.stderr)
-                        );
-                    }
-                }
-            } else {
-                eprintln!(
-                    "  Note: Full feature installation requires executing install.sh inside the dev container with _CONTAINER_USER and options. Bondar currently validates and fetches but skips execution to remain standalone. Feature '{id}' treated as validated."
-                );
-            }
-        } else {
-            eprintln!(
-                "  Note: Full feature installation requires executing install.sh inside the dev container with _CONTAINER_USER and options. Bondar currently validates and fetches but skips execution to remain standalone. Feature '{id}' treated as validated."
-            );
+        let container_path = format!("/tmp/bondar_features/{}", sanitize_id(id));
+        if let Err(e) = copy_feature_into_container(&dest_dir, container, &container_path) {
+            eprintln!("  Warning: could not copy feature into container: {e}");
+            return Ok(());
         }
+        install_in_container(id, opts, container, &container_path, None)?;
     } else {
-        eprintln!(
-            "  Note: Full feature installation requires executing install.sh inside the dev container with _CONTAINER_USER and options. Bondar currently validates and fetches but skips execution to remain standalone. Feature '{id}' treated as validated."
+        println!(
+            "  Feature {id} fetched to {}. Execution requires a running container (use 'bondar up' first).",
+            dest_dir.display()
         );
     }
+
     Ok(())
 }
 
@@ -234,5 +331,13 @@ mod tests {
         assert!(handle_features(&None, &None).is_ok());
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
         assert!(handle_features(&Some(empty), &None).is_ok());
+    }
+
+    #[test]
+    fn test_sanitize_id() {
+        assert_eq!(
+            sanitize_id("ghcr.io/devcontainers/features/common-utils:2"),
+            "ghcr-io-devcontainers-features-common-utils-2"
+        );
     }
 }

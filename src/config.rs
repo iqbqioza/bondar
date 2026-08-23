@@ -260,7 +260,7 @@ pub fn load_config(
     Ok((config, config_path))
 }
 
-fn strip_json_comments(input: &str) -> String {
+pub fn strip_json_comments(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     let mut in_string = false;

@@ -1,7 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::config::{ComposeFileValue, DevContainerConfig};
+use crate::config::{ComposeFileValue, DevContainerConfig, MountValue};
 use crate::error::{BondarError, Result};
 
 pub fn compose_files_args_for_build(
@@ -32,13 +32,164 @@ fn compose_files_args(config: &DevContainerConfig, config_path: &Path) -> Result
     Ok(args)
 }
 
-fn compose_base_command(config: &DevContainerConfig, config_path: &Path) -> Result<Command> {
+fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
+    let mut mount_type = None;
+    let mut source = None;
+    let mut target = None;
+    let mut readonly = false;
+    for part in mount.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((key, value)) = part.split_once('=') {
+            match key {
+                "type" => mount_type = Some(value),
+                "source" | "src" => source = Some(value),
+                "target" | "dst" | "destination" => target = Some(value),
+                "readonly" | "ro" => readonly = value == "true" || value == "1",
+                _ => {}
+            }
+        } else {
+            match part {
+                "readonly" | "ro" => readonly = true,
+                "bind" => mount_type = Some("bind"),
+                _ => {}
+            }
+        }
+    }
+    let mount_type = mount_type.unwrap_or("volume");
+    let source = source.unwrap_or_default();
+    let target = target?;
+    let mut vol = String::new();
+    if !source.is_empty() {
+        vol.push_str(source);
+        vol.push(':');
+    }
+    vol.push_str(target);
+    let _ = mount_type;
+    if readonly {
+        vol.push_str(":ro");
+    }
+    Some(vol)
+}
+
+fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) -> Result<PathBuf> {
+    let service = config
+        .service
+        .as_deref()
+        .ok_or_else(|| BondarError::Config("No service specified".to_string()))?;
+
+    let mut yaml = String::from("services:\n");
+    yaml.push_str(&format!("  {service}:\n"));
+
+    let has_env = !config.container_env.is_empty() || !config.remote_env.is_empty();
+    let mut ports: Vec<String> = Vec::new();
+    for port in &config.forward_ports {
+        let port_str = match port {
+            crate::config::ForwardPort::Number(n) => n.to_string(),
+            crate::config::ForwardPort::Text(s) => s.clone(),
+        };
+        if port_str.contains(':') {
+            ports.push(format!("\"{port_str}\""));
+        } else {
+            ports.push(format!("\"{port_str}:{port_str}\""));
+        }
+    }
+    if let Some(app_port) = &config.app_port {
+        let app_ports: Vec<String> = match app_port {
+            crate::config::AppPortValue::Single(p) => vec![port_value_to_string(p)],
+            crate::config::AppPortValue::Multiple(v) => {
+                v.iter().map(port_value_to_string).collect()
+            }
+        };
+        for p in app_ports {
+            ports.push(format!("\"{p}:{p}\""));
+        }
+    }
+
+    let mut volumes: Vec<String> = Vec::new();
+    for m in &config.mounts {
+        match m {
+            MountValue::String(s) => {
+                if let Some(vol) = mount_string_to_compose_volume(s) {
+                    volumes.push(vol);
+                }
+            }
+            MountValue::Object(obj) => {
+                if let Some(target) = &obj.target {
+                    let mut vol = String::new();
+                    if let Some(source) = &obj.source {
+                        vol.push_str(source);
+                        vol.push(':');
+                    }
+                    vol.push_str(target);
+                    volumes.push(vol);
+                }
+            }
+        }
+    }
+
+    let mut wrote_any = false;
+    if has_env {
+        wrote_any = true;
+        yaml.push_str("    environment:\n");
+        for (k, v) in config.container_env.iter().chain(config.remote_env.iter()) {
+            let expanded = crate::docker::expand_vars_for_host(v, workspace_folder);
+            yaml.push_str(&format!("      {k}: \"{expanded}\"\n"));
+        }
+    }
+    if !ports.is_empty() {
+        wrote_any = true;
+        yaml.push_str("    ports:\n");
+        for p in &ports {
+            yaml.push_str(&format!("      - {p}\n"));
+        }
+    }
+    if !volumes.is_empty() {
+        wrote_any = true;
+        yaml.push_str("    volumes:\n");
+        for v in &volumes {
+            yaml.push_str(&format!("      - \"{v}\"\n"));
+        }
+    }
+
+    if !wrote_any {
+        return Ok(PathBuf::new());
+    }
+
+    let basename = workspace_folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
+    let override_path = std::env::temp_dir().join(format!("bondar-{basename}-override.yml"));
+    std::fs::write(&override_path, yaml).map_err(BondarError::Io)?;
+    Ok(override_path)
+}
+
+fn compose_base_command(
+    config: &DevContainerConfig,
+    config_path: &Path,
+    workspace_folder: &Path,
+) -> Result<Command> {
     let mut cmd = Command::new("docker");
     cmd.arg("compose");
     for arg in compose_files_args(config, config_path)? {
         cmd.arg(arg);
     }
+    if let Ok(override_path) = write_compose_override(config, workspace_folder)
+        && !override_path.as_os_str().is_empty()
+    {
+        cmd.arg("-f").arg(override_path);
+    }
     Ok(cmd)
+}
+
+fn port_value_to_string(p: &crate::config::PortValue) -> String {
+    match p {
+        crate::config::PortValue::Number(n) => n.to_string(),
+        crate::config::PortValue::Text(s) => s.clone(),
+    }
 }
 
 pub fn compose_up(
@@ -48,7 +199,7 @@ pub fn compose_up(
     remove_existing: bool,
 ) -> Result<()> {
     println!("Starting Docker Compose services...");
-    let mut cmd = compose_base_command(config, config_path)?;
+    let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("up");
     cmd.arg("-d");
     if remove_existing {
@@ -84,7 +235,7 @@ pub fn compose_down(
     }
 
     println!("Stopping Docker Compose services...");
-    let mut cmd = compose_base_command(config, config_path)?;
+    let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("down");
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
@@ -108,7 +259,7 @@ pub fn get_service_container_id(
         .service
         .as_deref()
         .ok_or_else(|| BondarError::Config("No service specified".to_string()))?;
-    let mut cmd = compose_base_command(config, config_path)?;
+    let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("ps");
     cmd.arg("-q");
     cmd.arg(service);
@@ -161,7 +312,7 @@ pub fn compose_exec(
         .service
         .as_deref()
         .ok_or_else(|| BondarError::Config("No service".to_string()))?;
-    let mut cmd = compose_base_command(config, config_path)?;
+    let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("exec");
     if let Some(u) = user {
         cmd.arg("--user").arg(u);
