@@ -21,18 +21,14 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             .clone()
             .or_else(|| cfg.container_user.clone());
         let workdir = cfg.workspace_folder.clone();
-        let env = if cfg.remote_env.is_empty() {
-            None
-        } else {
-            Some(&cfg.remote_env)
-        };
+        let env = crate::command::exec::compose_exec_env(&cfg, &cfg_path, &ws, user.as_deref());
         return crate::compose::compose_exec(
             &cfg,
             &cfg_path,
             &ws,
             user.as_deref(),
             workdir.as_deref(),
-            env,
+            env.as_ref(),
             &shell_cmd,
         );
     }

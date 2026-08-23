@@ -473,7 +473,9 @@ pub fn compose_exec(
     }
     if let Some(env_map) = env {
         for (k, v) in env_map {
-            let expanded = crate::docker::expand_vars_for_host(v, workspace_folder);
+            let target = workdir.unwrap_or("/");
+            let expanded =
+                crate::docker::expand_vars_for_host_with_target(v, workspace_folder, target);
             cmd.arg("-e").arg(format!("{k}={expanded}"));
         }
     }

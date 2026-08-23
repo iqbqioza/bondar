@@ -19,21 +19,20 @@ pub fn run(
 
     if cfg.docker_compose_file.is_some() {
         let exec_user = user
+            .filter(|u| !u.is_empty())
             .or_else(|| cfg.remote_user.clone())
             .or_else(|| cfg.container_user.clone());
-        let exec_workdir = workdir.or(cfg.workspace_folder.clone());
-        let env = if cfg.remote_env.is_empty() {
-            None
-        } else {
-            Some(&cfg.remote_env)
-        };
+        let exec_workdir = workdir
+            .filter(|w| !w.is_empty())
+            .or(cfg.workspace_folder.clone());
+        let env = compose_exec_env(&cfg, &cfg_path, &ws, exec_user.as_deref());
         return crate::compose::compose_exec(
             &cfg,
             &cfg_path,
             &ws,
             exec_user.as_deref(),
             exec_workdir.as_deref(),
-            env,
+            env.as_ref(),
             &command,
         );
     }
@@ -78,5 +77,21 @@ pub fn merged_exec_env(
         None
     } else {
         Some(merged)
+    }
+}
+
+/// Remote env for compose exec, probing the service container when possible.
+pub fn compose_exec_env(
+    cfg: &config::DevContainerConfig,
+    cfg_path: &std::path::Path,
+    ws: &std::path::Path,
+    exec_user: Option<&str>,
+) -> Option<std::collections::HashMap<String, String>> {
+    if let Ok(container_name) = crate::compose::get_service_container_name(cfg, cfg_path, ws) {
+        merged_exec_env(cfg, &container_name, exec_user)
+    } else if cfg.remote_env.is_empty() {
+        None
+    } else {
+        Some(cfg.remote_env.clone())
     }
 }
