@@ -93,33 +93,41 @@ pub fn run(
         remove_existing,
     )?;
 
+    // A fresh container exists when there was none before, or when
+    // --remove-existing-container forced a recreate.
+    let newly_created = !was_existing || remove_existing;
+
     host::handle_update_remote_user_uid(&cfg, &container_name)?;
 
-    crate::features::handle_features_with_container(
-        &cfg.features,
-        &cfg.override_feature_install_order,
-        Some(&container_name),
-        cfg.remote_user.as_deref(),
-    )?;
+    // Features install once at container creation; do not re-install on
+    // restart of an existing container.
+    if newly_created {
+        crate::features::handle_features_with_container(
+            &cfg.features,
+            &cfg.override_feature_install_order,
+            Some(&container_name),
+            cfg.remote_user.as_deref(),
+        )?;
 
-    // Store merged feature customizations as a container label
-    let merged_custom = crate::features::collect_feature_customizations(&cfg.features);
-    if !merged_custom.as_object().is_none_or(|m| m.is_empty()) {
-        let json_str = serde_json::to_string(&merged_custom).unwrap_or_default();
-        let label_arg = format!("devcontainer.feature_customizations={json_str}");
-        // `docker update --label-add` is supported broadly; fall back to
-        // `docker label` (Docker 25+) for stopped containers.
-        let ok = std::process::Command::new("docker")
-            .args(["update", "--label-add", &label_arg, &container_name])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !ok {
-            let _ = std::process::Command::new("docker")
-                .args(["label", &container_name, &label_arg])
-                .status();
+        // Store merged feature customizations as a container label
+        let merged_custom = crate::features::collect_feature_customizations(&cfg.features);
+        if !merged_custom.as_object().is_none_or(|m| m.is_empty()) {
+            let json_str = serde_json::to_string(&merged_custom).unwrap_or_default();
+            let label_arg = format!("devcontainer.feature_customizations={json_str}");
+            // `docker update --label-add` is supported broadly; fall back to
+            // `docker label` (Docker 25+) for stopped containers.
+            let ok = std::process::Command::new("docker")
+                .args(["update", "--label-add", &label_arg, &container_name])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                let _ = std::process::Command::new("docker")
+                    .args(["label", &container_name, &label_arg])
+                    .status();
+            }
+            println!("Merged feature customizations stored on container label");
         }
-        println!("Merged feature customizations stored on container label");
     }
 
     let probed_env = if let Some(probe) = &cfg.user_env_probe
@@ -137,7 +145,6 @@ pub fn run(
 
     let workspace_target = cfg.workspace_folder_or_default();
     let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
-    let newly_created = !was_existing;
     let lifecycle_env = {
         let mut merged = cfg.remote_env.clone();
         if let Some(probed) = &probed_env {

@@ -343,9 +343,17 @@ fn install_in_container(
 }
 
 fn read_feature_metadata(dir: &Path) -> Option<serde_json::Value> {
-    let path = dir.join("devcontainer-features.json");
-    let content = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    // The spec metadata file is `devcontainer-feature.json` (singular);
+    // also accept the plural form for compatibility.
+    for name in ["devcontainer-feature.json", "devcontainer-features.json"] {
+        let path = dir.join(name);
+        if let Ok(content) = std::fs::read_to_string(path)
+            && let Ok(value) = serde_json::from_str(&content)
+        {
+            return Some(value);
+        }
+    }
+    None
 }
 
 fn install_feature(
