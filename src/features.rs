@@ -543,7 +543,8 @@ mod tests {
     #[test]
     fn test_feature_cache_dir() {
         let dir = feature_cache_dir();
-        assert!(dir.starts_with(&std::env::temp_dir()));
+        let temp_dir = std::env::temp_dir();
+        assert!(dir.starts_with(&temp_dir));
         assert_eq!(dir.file_name().unwrap(), "bondar_features");
     }
 
