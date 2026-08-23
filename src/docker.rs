@@ -950,6 +950,20 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_vars_for_host_default_target() {
+        let ws = std::path::Path::new("/home/user/proj");
+        let expanded =
+            expand_vars_for_host("${localWorkspaceFolder}|${containerWorkspaceFolder}", ws);
+        assert_eq!(expanded, "/home/user/proj|/workspace");
+    }
+
+    #[test]
+    fn test_expand_devcontainer_id_pass_through() {
+        let ws = std::path::Path::new("/home/user/proj");
+        assert_eq!(expand_devcontainer_id("no id here", ws), "no id here");
+    }
+
+    #[test]
     fn test_expand_local_env_vars_default() {
         assert_eq!(
             expand_local_env_vars("${localEnv:UNSET_VAR_XYZ_123:fallback}"),
