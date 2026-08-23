@@ -263,6 +263,13 @@ impl DevContainerConfig {
                 "'service' must not be empty".to_string(),
             ));
         }
+        for key in self.container_env.keys().chain(self.remote_env.keys()) {
+            if key.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'containerEnv'/'remoteEnv' keys must not be empty".to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -562,5 +569,16 @@ mod tests {
         let empty_service: DevContainerConfig =
             serde_json::from_str(r#"{"dockerComposeFile": "c.yml", "service": ""}"#).unwrap();
         assert!(empty_service.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_empty_env_keys() {
+        let cfg: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "containerEnv": {"": "value"}}"#).unwrap();
+        assert!(cfg.validate().is_err());
+
+        let cfg2: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "remoteEnv": {"": "value"}}"#).unwrap();
+        assert!(cfg2.validate().is_err());
     }
 }
