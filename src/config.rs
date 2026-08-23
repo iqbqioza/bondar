@@ -275,9 +275,16 @@ pub fn load_config(
             workspace_folder.display()
         )));
     };
+    let config_path = config_path.canonicalize().map_err(|e| {
+        BondarError::NotFound(format!(
+            "Cannot resolve config path {}: {e}",
+            config_path.display()
+        ))
+    })?;
 
     let raw = fs::read_to_string(&config_path)?;
-    let stripped = strip_json_comments(&raw);
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    let stripped = strip_json_comments(raw);
     let config: DevContainerConfig = serde_json::from_str(&stripped)?;
     config.validate()?;
     Ok((config, config_path))

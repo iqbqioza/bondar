@@ -118,9 +118,12 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
             && let Some(arr) = opts.get("installsAfter").and_then(|v| v.as_array())
         {
             for dep in arr {
-                if let Some(dep_str) = dep.as_str()
-                    && feat_map.contains_key(dep_str)
-                {
+                if let Some(dep_str) = dep.as_str() {
+                    if !feat_map.contains_key(dep_str) {
+                        eprintln!(
+                            "Warning: feature '{id}' installsAfter references unknown feature '{dep_str}'"
+                        );
+                    }
                     visit(dep_str, feat_map, sorted, visiting, visited);
                 }
             }
@@ -146,6 +149,10 @@ fn run_output(cmd: &mut std::process::Command, desc: &str) -> Result<(bool, Stri
     let output = cmd
         .output()
         .map_err(|e| BondarError::Docker(format!("Failed to run {desc}: {e}")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.trim().is_empty() {
+        print!("{stdout}");
+    }
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     Ok((output.status.success(), stderr))
 }

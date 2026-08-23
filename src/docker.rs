@@ -339,15 +339,7 @@ pub fn create_and_start_container(
         "devcontainer.config_file={}",
         config_path.display()
     ));
-    let devcontainer_id = {
-        let ws_str = workspace_folder.to_string_lossy().to_string();
-        let mut hash: u64 = 14695981039346656037;
-        for b in ws_str.bytes() {
-            hash ^= u64::from(b);
-            hash = hash.wrapping_mul(1099511628211);
-        }
-        format!("{hash:016x}")
-    };
+    let devcontainer_id = devcontainer_id_for(workspace_folder);
     cmd.arg("--label")
         .arg(format!("devcontainer.id={devcontainer_id}"));
 
@@ -410,7 +402,7 @@ pub fn create_and_start_container(
         }
     }
 
-    // Env - containerEnv and remoteEnv (both set as -e for now)
+    // Env - containerEnv is set on the container; remoteEnv applies only at exec time
     for (k, v) in &config.container_env {
         let expanded_v = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
         cmd.arg("-e").arg(format!("{k}={expanded_v}"));
@@ -512,6 +504,15 @@ pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
 }
 
 pub fn publish_port_arg(spec: &str) -> Option<String> {
+    // Preserve an explicit /udp protocol suffix if present
+    let (base, protocol) = match spec.strip_suffix("/udp") {
+        Some(b) => (b, "/udp"),
+        None => (spec, ""),
+    };
+    publish_port_arg_inner(base).map(|p| format!("{p}{protocol}"))
+}
+
+fn publish_port_arg_inner(spec: &str) -> Option<String> {
     if spec.is_empty() {
         return None;
     }
@@ -617,17 +618,21 @@ pub fn expand_vars_for_container(
     result
 }
 
-fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
-    if !input.contains("${devcontainerId}") {
-        return input.to_string();
-    }
+fn devcontainer_id_for(workspace_folder: &Path) -> String {
     let ws_str = workspace_folder.to_string_lossy().to_string();
     let mut hash: u64 = 14695981039346656037;
     for b in ws_str.bytes() {
         hash ^= u64::from(b);
         hash = hash.wrapping_mul(1099511628211);
     }
-    let id = format!("{hash:016x}");
+    format!("{hash:016x}")
+}
+
+fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
+    if !input.contains("${devcontainerId}") {
+        return input.to_string();
+    }
+    let id = devcontainer_id_for(workspace_folder);
     input.replace("${devcontainerId}", &id)
 }
 

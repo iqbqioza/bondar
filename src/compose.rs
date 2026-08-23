@@ -423,6 +423,7 @@ pub fn compose_exec(
     workspace_folder: &Path,
     user: Option<&str>,
     workdir: Option<&str>,
+    env: Option<&std::collections::HashMap<String, String>>,
     command: &[String],
 ) -> Result<()> {
     let service = config
@@ -436,6 +437,12 @@ pub fn compose_exec(
     }
     if let Some(w) = workdir {
         cmd.arg("-w").arg(w);
+    }
+    if let Some(env_map) = env {
+        for (k, v) in env_map {
+            let expanded = crate::docker::expand_vars_for_host(v, workspace_folder);
+            cmd.arg("-e").arg(format!("{k}={expanded}"));
+        }
     }
     // Handle TTY
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin())

@@ -61,7 +61,8 @@ pub fn run(
     // serialized struct which contains all fields including nulls.
     let mut errors: Vec<String> = Vec::new();
     let raw = std::fs::read_to_string(&cfg_path).map_err(crate::error::BondarError::Io)?;
-    let stripped = crate::config::strip_json_comments(&raw);
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    let stripped = crate::config::strip_json_comments(raw);
     let raw_value: serde_json::Value = serde_json::from_str(&stripped)
         .map_err(|e| crate::error::BondarError::Config(format!("Invalid JSON: {e}")))?;
 
@@ -104,6 +105,7 @@ pub fn run(
             eprintln!("{e}");
         }
         eprintln!("Configuration is INVALID");
+        std::process::exit(1);
     }
 
     if cfg.docker_compose_file.is_some() {
@@ -133,8 +135,15 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     let mut merged: Map<String, Value> = Map::new();
 
     let mut env: Map<String, Value> = Map::new();
+    let target = if cfg.docker_compose_file.is_some() {
+        cfg.workspace_folder
+            .clone()
+            .unwrap_or_else(|| "/".to_string())
+    } else {
+        cfg.workspace_folder_or_default()
+    };
     for (k, v) in cfg.container_env.iter().chain(cfg.remote_env.iter()) {
-        let expanded = docker::expand_vars_for_host(v, ws);
+        let expanded = docker::expand_vars_for_host_with_target(v, ws, &target);
         env.insert(k.clone(), Value::String(expanded));
     }
     for (k, v) in docker::resolve_secrets(cfg) {
