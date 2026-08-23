@@ -171,10 +171,18 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 workspace_folder,
                 &container_target,
             );
-            yaml.push_str(&format!("      {k}: \"{expanded}\"\n"));
+            yaml.push_str(&format!(
+                "      {}: \"{}\"\n",
+                escape_yaml_key(k),
+                escape_yaml_value(&expanded)
+            ));
         }
         for (k, v) in crate::docker::resolve_secrets(config) {
-            yaml.push_str(&format!("      {k}: \"{v}\"\n"));
+            yaml.push_str(&format!(
+                "      {}: \"{}\"\n",
+                escape_yaml_key(&k),
+                escape_yaml_value(&v)
+            ));
         }
     }
     if !ports.is_empty() {
@@ -227,6 +235,26 @@ fn port_value_to_string(p: &crate::config::PortValue) -> String {
     match p {
         crate::config::PortValue::Number(n) => n.to_string(),
         crate::config::PortValue::Text(s) => s.clone(),
+    }
+}
+
+fn escape_yaml_value(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
+fn escape_yaml_key(input: &str) -> String {
+    if input
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        input.to_string()
+    } else {
+        format!("\"{}\"", escape_yaml_value(input))
     }
 }
 
@@ -441,5 +469,17 @@ mod tests {
     #[test]
     fn test_mount_string_missing_target() {
         assert_eq!(mount_string_to_compose_volume("type=bind,source=/a"), None);
+    }
+
+    #[test]
+    fn test_escape_yaml_value() {
+        assert_eq!(escape_yaml_value("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
+        assert_eq!(escape_yaml_value("plain"), "plain");
+    }
+
+    #[test]
+    fn test_escape_yaml_key() {
+        assert_eq!(escape_yaml_key("MY_VAR-1"), "MY_VAR-1");
+        assert_eq!(escape_yaml_key("weird key"), "\"weird key\"");
     }
 }

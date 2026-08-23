@@ -380,15 +380,30 @@ fn install_feature(
     }
 
     // Read devcontainer-features.json metadata for installsAfter dependencies
-    if let Some(meta) = read_feature_metadata(&dest_dir)
-        && let Some(after) = meta.get("installsAfter").and_then(|v| v.as_array())
-    {
-        let deps: Vec<String> = after
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-        if !deps.is_empty() {
-            println!("  Feature declares installsAfter: {deps:?}");
+    if let Some(meta) = read_feature_metadata(&dest_dir) {
+        if let Some(after) = meta.get("installsAfter").and_then(|v| v.as_array()) {
+            let deps: Vec<String> = after
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            if !deps.is_empty() {
+                println!("  Feature declares installsAfter: {deps:?}");
+            }
+        }
+        // Report feature-declared requirements that need a container rebuild
+        for key in [
+            "containerEnv",
+            "mounts",
+            "privileged",
+            "init",
+            "capAdd",
+            "securityOpt",
+        ] {
+            if let Some(val) = meta.get(key) {
+                println!(
+                    "  Note: feature declares {key} = {val}; a container rebuild ('bondar up --remove-existing-container') is required to apply it"
+                );
+            }
         }
     }
 

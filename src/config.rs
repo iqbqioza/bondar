@@ -218,6 +218,11 @@ impl DevContainerConfig {
                 "'dockerComposeFile' cannot be combined with 'image' or 'build'".to_string(),
             ));
         }
+        if self.workspace_mount.is_some() && self.workspace_folder.is_none() {
+            return Err(BondarError::Config(
+                "'workspaceFolder' must be specified when using 'workspaceMount'".to_string(),
+            ));
+        }
         Ok(())
     }
 

@@ -49,6 +49,9 @@ pub fn run(
     if !cfg.extra.is_empty() {
         println!("Unknown/custom fields (in extra):");
         for (k, v) in &cfg.extra {
+            if k == "$schema" {
+                continue;
+            }
             println!("  {k}: {v}");
         }
     }
