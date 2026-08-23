@@ -41,7 +41,6 @@ fn compose_files_args(
 }
 
 fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
-    let mut mount_type = None;
     let mut source = None;
     let mut target = None;
     let mut readonly = false;
@@ -52,7 +51,6 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
         }
         if let Some((key, value)) = part.split_once('=') {
             match key {
-                "type" => mount_type = Some(value),
                 "source" | "src" => source = Some(value),
                 "target" | "dst" | "destination" => target = Some(value),
                 "readonly" | "ro" => readonly = value == "true" || value == "1",
@@ -61,12 +59,10 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
         } else {
             match part {
                 "readonly" | "ro" => readonly = true,
-                "bind" => mount_type = Some("bind"),
                 _ => {}
             }
         }
     }
-    let mount_type = mount_type.unwrap_or("volume");
     let source = source.unwrap_or_default();
     let target = target?;
     let mut vol = String::new();
@@ -75,7 +71,6 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
         vol.push(':');
     }
     vol.push_str(target);
-    let _ = mount_type;
     if readonly {
         vol.push_str(":ro");
     }
@@ -95,8 +90,6 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     let mut yaml = String::from("services:\n");
     yaml.push_str(&format!("  {service}:\n"));
 
-    let has_env =
-        !config.container_env.is_empty() || !config.secrets.as_ref().is_none_or(|s| s.is_empty());
     let mut ports: Vec<String> = Vec::new();
     for port in &config.forward_ports {
         let port_str = match port {
@@ -178,26 +171,25 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     }
 
     let mut wrote_any = false;
-    if has_env {
+    // Build env lines first so an empty `environment:` key is never emitted
+    // (e.g. when secrets contain only file-path entries that cannot be resolved).
+    let mut env_lines: Vec<(String, String)> = Vec::new();
+    for (k, v) in &config.container_env {
+        let expanded =
+            crate::docker::expand_vars_for_host_with_target(v, workspace_folder, &container_target);
+        env_lines.push((k.clone(), expanded));
+    }
+    for (k, v) in crate::docker::resolve_secrets(config) {
+        env_lines.push((k, v));
+    }
+    if !env_lines.is_empty() {
         wrote_any = true;
         yaml.push_str("    environment:\n");
-        for (k, v) in &config.container_env {
-            let expanded = crate::docker::expand_vars_for_host_with_target(
-                v,
-                workspace_folder,
-                &container_target,
-            );
+        for (k, v) in &env_lines {
             yaml.push_str(&format!(
                 "      {}: \"{}\"\n",
                 escape_yaml_key(k),
-                escape_yaml_value(&expanded)
-            ));
-        }
-        for (k, v) in crate::docker::resolve_secrets(config) {
-            yaml.push_str(&format!(
-                "      {}: \"{}\"\n",
-                escape_yaml_key(&k),
-                escape_yaml_value(&v)
+                escape_yaml_value(v)
             ));
         }
     }
