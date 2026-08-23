@@ -24,8 +24,11 @@ pub fn run(
     let ws = docker::get_workspace_folder(workspace_folder)?;
     let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
-    if no_build && cfg.build.is_none() {
+    if no_build && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
         eprintln!("Warning: --no-build has no effect (no 'build' section configured)");
+    }
+    if no_cache && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
+        eprintln!("Warning: --no-cache has no effect (no 'build' section configured)");
     }
 
     let summary = lifecycle::lifecycle_summary(&cfg);

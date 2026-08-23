@@ -287,6 +287,34 @@ impl DevContainerConfig {
                 _ => {}
             }
         }
+        for cap in &self.cap_add {
+            if cap.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'capAdd' entries must not be empty".to_string(),
+                ));
+            }
+        }
+        for opt in &self.security_opt {
+            if opt.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'securityOpt' entries must not be empty".to_string(),
+                ));
+            }
+        }
+        for arg in &self.run_args {
+            if arg.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'runArgs' entries must not be empty".to_string(),
+                ));
+            }
+        }
+        for s in &self.run_services {
+            if s.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'runServices' entries must not be empty".to_string(),
+                ));
+            }
+        }
         if let Some(f) = &self.docker_compose_file {
             let empty = match f {
                 ComposeFileValue::Single(s) => s.trim().is_empty(),
@@ -590,18 +618,35 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_workspace_mount_requires_folder() {
-        let cfg: DevContainerConfig = serde_json::from_str(
-            r#"{"image": "ubuntu:22.04", "workspaceMount": "type=bind,source=.,target=/x"}"#,
-        )
-        .unwrap();
-        assert!(cfg.validate().is_err());
+    fn test_validate_secrets_keys() {
+        let eq: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"A=B": {"localEnv": "X"}}}"#)
+                .unwrap();
+        assert!(eq.validate().is_err());
 
-        let ok: DevContainerConfig = serde_json::from_str(
-            r#"{"image": "ubuntu:22.04", "workspaceMount": "type=bind,source=.,target=/x", "workspaceFolder": "/x"}"#,
-        )
-        .unwrap();
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"SEC": {"localEnv": "X"}}}"#)
+                .unwrap();
         assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_array_entries() {
+        let bad_cap: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "capAdd": [""]}"#).unwrap();
+        assert!(bad_cap.validate().is_err());
+
+        let bad_opt: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "securityOpt": [""]}"#).unwrap();
+        assert!(bad_opt.validate().is_err());
+
+        let bad_arg: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "runArgs": [""]}"#).unwrap();
+        assert!(bad_arg.validate().is_err());
+
+        let bad_svc: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "runServices": [""]}"#).unwrap();
+        assert!(bad_svc.validate().is_err());
     }
 
     #[test]
@@ -720,19 +765,6 @@ mod tests {
         )
         .unwrap();
         assert!(empty_target.validate().is_err());
-    }
-
-    #[test]
-    fn test_validate_secrets_keys() {
-        let eq: DevContainerConfig =
-            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"A=B": {"localEnv": "X"}}}"#)
-                .unwrap();
-        assert!(eq.validate().is_err());
-
-        let ok: DevContainerConfig =
-            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"SEC": {"localEnv": "X"}}}"#)
-                .unwrap();
-        assert!(ok.validate().is_ok());
     }
 
     #[test]

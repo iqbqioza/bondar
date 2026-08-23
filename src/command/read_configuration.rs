@@ -104,17 +104,11 @@ pub fn run(
             errors.push(msg);
         }
     };
-    if cfg.image.is_none() && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
-        push_error(
-            &mut errors,
-            "  No image/build/dockerComposeFile specified".to_string(),
-        );
-    }
-    if cfg.docker_compose_file.is_some() && cfg.service.is_none() {
-        push_error(
-            &mut errors,
-            "  dockerComposeFile requires service".to_string(),
-        );
+    // Include the internal validation checks (e.g. absolute workspaceFolder,
+    // env keys without '=', non-empty mounts) as reported errors
+    if let Err(e) = cfg.validate() {
+        let msg = e.to_string().replace("Config error: ", "");
+        push_error(&mut errors, format!("  {msg}"));
     }
     if let Some(wait) = &cfg.wait_for {
         let valid = [

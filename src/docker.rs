@@ -149,7 +149,12 @@ pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) 
                     }
                 })
                 .collect();
-            format!("bondar-{sanitized}")
+            let suffix = if sanitized.is_empty() {
+                "workspace".to_string()
+            } else {
+                sanitized
+            };
+            format!("bondar-{suffix}")
         } else {
             let basename = workspace_folder
                 .file_name()
@@ -165,7 +170,12 @@ pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) 
                     }
                 })
                 .collect();
-            format!("bondar-{sanitized}")
+            let suffix = if sanitized.is_empty() {
+                "workspace".to_string()
+            } else {
+                sanitized
+            };
+            format!("bondar-{suffix}")
         };
         Ok(base)
     } else if let Some(image) = &config.image {
@@ -741,6 +751,7 @@ pub fn expand_vars_for_host_with_target(
     let container_basename = container_workspace
         .rsplit('/')
         .next()
+        .filter(|s| !s.is_empty())
         .unwrap_or("workspace")
         .to_string();
     result = result.replace("${containerWorkspaceFolderBasename}", &container_basename);
@@ -766,6 +777,7 @@ pub fn expand_vars_for_container(
     let container_basename = container_workspace
         .rsplit('/')
         .next()
+        .filter(|s| !s.is_empty())
         .unwrap_or("workspace")
         .to_string();
 
