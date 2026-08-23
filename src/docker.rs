@@ -81,6 +81,12 @@ pub fn build_image(
 
     for (k, v) in &build.args {
         let expanded = expand_vars_for_host(v, workspace_folder);
+        if expanded.is_empty() {
+            eprintln!(
+                "Warning: build arg '{k}' resolved to an empty value (unset variable?); skipping"
+            );
+            continue;
+        }
         cmd.arg("--build-arg").arg(format!("{k}={expanded}"));
     }
 
