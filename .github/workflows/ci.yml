@@ -48,7 +48,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Unit tests
-        run: cargo test --lib --bins
+        run: cargo test --bins
 
       - name: Integration tests (docker-gated)
         if: runner.os == 'Linux'
