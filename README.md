@@ -43,7 +43,7 @@ bondar read-configuration --workspace-folder ./sample --include-merged-configura
 |---|---|
 | `image` / `build` / `dockerComposeFile` | Supported |
 | Lifecycle scripts (`initializeCommand` etc., 6 types) | Supported (String/Array/Object, background execution via `waitFor`) |
-| `containerEnv` / `remoteEnv` / `secrets` | Supported (`${localEnv:}` / `${containerEnv:}` / `${devcontainerId}` expansion) |
+| `containerEnv` / `remoteEnv` / `secrets` | Supported (`${localEnv:}` / `${containerEnv:}` / `${devcontainerId}` expansion; secrets use `{"KEY": {"localEnv": "VAR"}}` form - the file path string form is warned and skipped) |
 | `features` / `overrideFeatureInstallOrder` | Supported (`oras`/`docker pull` -> `docker cp` -> `install.sh`) |
 | `mounts` / `workspaceMount` / `forwardPorts` / `appPort` | Supported (`docker run` and compose override.yml injection) |
 | `hostRequirements` / `updateRemoteUserUID` | Supported (warnings, `usermod`/`groupmod`/`chown`/`useradd`) |

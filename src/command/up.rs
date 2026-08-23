@@ -480,6 +480,21 @@ fn run_compose(
         )?;
     }
 
+    if let Some(wait) = &cfg.wait_for {
+        let valid = [
+            "initializeCommand",
+            "onCreateCommand",
+            "updateContentCommand",
+            "postCreateCommand",
+            "postStartCommand",
+        ];
+        if !valid.contains(&wait.as_str()) {
+            eprintln!("Warning: waitFor '{wait}' is not a valid lifecycle command");
+        } else if wait_idx != usize::MAX {
+            println!("waitFor: {wait} - commands after this run in background");
+        }
+    }
+
     println!("Compose service {service} is up (container {container_name})");
     println!("  Workspace: {}", ws.display());
     Ok(())

@@ -535,6 +535,7 @@ mod tests {
     fn test_escape_yaml_value() {
         assert_eq!(escape_yaml_value("a\"b\\c\nd"), "a\\\"b\\\\c\\nd");
         assert_eq!(escape_yaml_value("plain"), "plain");
+        assert_eq!(escape_yaml_value("a\tb\rc"), "a\\tb\\rc");
     }
 
     #[test]

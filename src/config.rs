@@ -258,7 +258,7 @@ pub fn find_config_path(workspace_folder: &Path) -> Option<PathBuf> {
         workspace_folder.join(".devcontainer/devcontainer.json"),
         workspace_folder.join(".devcontainer.json"),
     ];
-    candidates.into_iter().find(|p| p.exists())
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 pub fn load_config(
@@ -378,6 +378,22 @@ mod tests {
         let stripped = strip_json_comments(input);
         let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
         assert_eq!(v["image"], "http://example.com");
+    }
+
+    #[test]
+    fn test_preserve_double_slash_in_string() {
+        let input = r#"{"url": "http://example.com/path//double"}"#;
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(v["url"], "http://example.com/path//double");
+    }
+
+    #[test]
+    fn test_preserve_comment_markers_in_string() {
+        let input = r#"{"text": "a /* not a comment */ b // also not"}"#;
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(v["text"], "a /* not a comment */ b // also not");
     }
 
     #[test]
