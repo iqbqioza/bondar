@@ -69,10 +69,15 @@ fn execute_value_with_env(
             if arr.is_empty() {
                 return Ok(());
             }
-            let parts: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
+            let mut parts: Vec<String> = Vec::new();
+            for v in arr {
+                match v.as_str() {
+                    Some(s) => parts.push(String::from(s)),
+                    None => eprintln!(
+                        "Warning: lifecycle array contains a non-string element {v}; ignoring it"
+                    ),
+                }
+            }
             if parts.is_empty() {
                 return Err(BondarError::Config(
                     "Invalid lifecycle array command".to_string(),
@@ -219,10 +224,15 @@ fn spawn_container_value(value: &serde_json::Value, exec: &ContainerExec<'_>) ->
             if arr.is_empty() {
                 return Ok(());
             }
-            let parts: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
+            let mut parts: Vec<String> = Vec::new();
+            for v in arr {
+                match v.as_str() {
+                    Some(s) => parts.push(String::from(s)),
+                    None => eprintln!(
+                        "Warning: lifecycle array contains a non-string element {v}; ignoring it"
+                    ),
+                }
+            }
             if parts.is_empty() {
                 return Err(BondarError::Config(
                     "Invalid lifecycle array command".to_string(),
