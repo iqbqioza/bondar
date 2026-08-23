@@ -300,6 +300,23 @@ fn ensure_extracted(dest_dir: &Path) {
             continue;
         };
         if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".tar") {
+            // Guard against path traversal / absolute paths in the archive
+            if let Ok(list) = std::process::Command::new("tar")
+                .arg("-tf")
+                .arg(&path)
+                .output()
+            {
+                let listing = String::from_utf8_lossy(&list.stdout);
+                if listing
+                    .lines()
+                    .any(|l| l.starts_with('/') || l.split('/').any(|c| c == ".."))
+                {
+                    eprintln!(
+                        "  Warning: archive {name} contains unsafe paths; skipping expansion"
+                    );
+                    continue;
+                }
+            }
             println!("  Expanding archive {name}...");
             let status = std::process::Command::new("tar")
                 .arg("-xf")
@@ -501,6 +518,11 @@ fn install_feature(
         eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
         return Ok(());
     }
+    if !opts.is_object() && !opts.is_null() {
+        eprintln!(
+            "Warning: feature '{id}' options must be an object, got {opts}; ignoring options"
+        );
+    }
 
     println!("Attempting to install feature '{id}' with opts {opts}...");
 
@@ -510,10 +532,9 @@ fn install_feature(
         return Ok(());
     }
     if let Err(e) = fetch_feature(id, &dest_dir) {
-        eprintln!("  Warning: could not fetch feature {id}: {e}");
         // Avoid stale metadata from a previous failed/partial fetch
         let _ = std::fs::remove_dir_all(&dest_dir);
-        return Ok(());
+        return Err(e);
     }
 
     // Read devcontainer-features.json metadata for installsAfter dependencies

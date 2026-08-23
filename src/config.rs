@@ -247,6 +247,13 @@ impl DevContainerConfig {
                 "'workspaceFolder' must be specified when using 'workspaceMount'".to_string(),
             ));
         }
+        if let Some(m) = &self.workspace_mount
+            && m.trim().is_empty()
+        {
+            return Err(BondarError::Config(
+                "'workspaceMount' must not be empty".to_string(),
+            ));
+        }
         if let Some(f) = &self.workspace_folder
             && f.trim().is_empty()
         {
@@ -288,6 +295,21 @@ impl DevContainerConfig {
                 return Err(BondarError::Config(format!(
                     "'forwardPorts' entry {n} is outside the valid port range 1-65535"
                 )));
+            }
+        }
+        if let Some(app) = &self.app_port {
+            let ports: Vec<&PortValue> = match app {
+                AppPortValue::Single(p) => vec![p],
+                AppPortValue::Multiple(v) => v.iter().collect(),
+            };
+            for p in ports {
+                if let PortValue::Number(n) = p
+                    && *n == 0
+                {
+                    return Err(BondarError::Config(format!(
+                        "'appPort' entry {n} is outside the valid port range 1-65535"
+                    )));
+                }
             }
         }
         Ok(())
@@ -635,6 +657,23 @@ mod tests {
             serde_json::from_str(r#"{"image": "ubuntu", "forwardPorts": [1, 65535, "8080:80"]}"#)
                 .unwrap();
         assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_app_port_range_and_workspace_mount() {
+        let bad: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "appPort": [0]}"#).unwrap();
+        assert!(bad.validate().is_err());
+
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "appPort": [8080]}"#).unwrap();
+        assert!(ok.validate().is_ok());
+
+        let bad_mount: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "workspaceFolder": "/ws", "workspaceMount": ""}"#,
+        )
+        .unwrap();
+        assert!(bad_mount.validate().is_err());
     }
 
     #[test]
