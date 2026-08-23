@@ -515,6 +515,34 @@ mod tests {
     }
 
     #[test]
+    fn test_find_config_path() {
+        let dir = std::env::temp_dir().join("bondar-cfg-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        assert!(find_config_path(&dir).is_none());
+
+        std::fs::write(dir.join(".devcontainer/devcontainer.json"), "{}").unwrap();
+        assert!(find_config_path(&dir).is_some());
+
+        let dir2 = std::env::temp_dir().join("bondar-cfg-test2");
+        let _ = std::fs::remove_dir_all(&dir2);
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(dir2.join(".devcontainer.json"), "{}").unwrap();
+        let found = find_config_path(&dir2).unwrap();
+        assert_eq!(found.file_name().unwrap(), ".devcontainer.json");
+
+        // A directory named devcontainer.json must be ignored (is_file check)
+        let dir3 = std::env::temp_dir().join("bondar-cfg-test3");
+        let _ = std::fs::remove_dir_all(&dir3);
+        std::fs::create_dir_all(dir3.join(".devcontainer/devcontainer.json")).unwrap();
+        assert!(find_config_path(&dir3).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+        let _ = std::fs::remove_dir_all(&dir3);
+    }
+
+    #[test]
     fn test_validate_empty_strings() {
         let empty_image: DevContainerConfig = serde_json::from_str(r#"{"image": ""}"#).unwrap();
         assert!(empty_image.validate().is_err());

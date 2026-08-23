@@ -483,4 +483,9 @@ mod tests {
         );
         assert_eq!(parse_id_output("uid=0(root) gid=0", "gid="), Some(0));
     }
+
+    #[test]
+    fn test_available_cpus() {
+        assert!(available_cpus() >= 1);
+    }
 }

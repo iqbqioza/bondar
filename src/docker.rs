@@ -7,6 +7,18 @@ use crate::config::{DevContainerConfig, MountValue};
 use crate::error::{BondarError, Result};
 
 pub fn check_docker_available() -> Result<()> {
+    // Distinguish a missing CLI from an unreachable daemon
+    let cli_ok = Command::new("docker")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !cli_ok {
+        return Err(BondarError::Docker(
+            "Docker CLI not found in PATH; install Docker to use bondar".to_string(),
+        ));
+    }
+
     let output = Command::new("docker")
         .arg("version")
         .arg("--format")
@@ -17,7 +29,7 @@ pub fn check_docker_available() -> Result<()> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(BondarError::Docker(format!(
-            "Docker not available: {stderr}"
+            "Docker daemon not reachable: {stderr}"
         )));
     }
     Ok(())
