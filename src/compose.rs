@@ -332,18 +332,6 @@ pub fn compose_up(
             eprintln!("Warning: duplicate runServices entry '{s}', skipping");
         }
     }
-    if config.run_services.is_empty()
-        && let Some(services) = config.extra.get("runServices").and_then(|v| v.as_array())
-    {
-        // Legacy fallback for configs parsed before run_services existed
-        for s in services {
-            if let Some(name) = s.as_str()
-                && seen_services.insert(name.to_string())
-            {
-                cmd.arg(name);
-            }
-        }
-    }
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     let status = cmd

@@ -223,7 +223,7 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
             return Ok(());
         }
         eprintln!("  Warning: oras pull failed: {stderr}");
-        return Err(BondarError::Docker(format!("oras pull failed for {id}")));
+        // Fall through to the docker pull fallback
     }
 
     // Fallback: docker pull (works for features that are also container images)
@@ -235,22 +235,33 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
     )?;
     if ok {
         println!("  Pulled feature image {feature_image}; extracting feature files...");
-        let tmp_name = format!("bondar-feature-extract-{}", std::process::id());
+        let id_suffix: String = sanitize_id(id).chars().take(16).collect();
+        let tmp_name = format!("bondar-feature-extract-{}-{id_suffix}", std::process::id());
+        let dest_str = dest_dir.to_str().unwrap_or("/tmp");
         let created = std::process::Command::new("docker")
             .args(["create", "--name", &tmp_name, feature_image])
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
-        let extracted = created
+        // Feature images typically carry /install.sh at the root; copy only
+        // that file instead of the whole root filesystem (which may include
+        // mount points that docker cp cannot handle).
+        let cp_install = created
             && std::process::Command::new("docker")
-                .args([
-                    "cp",
-                    &format!("{tmp_name}:/"),
-                    dest_dir.to_str().unwrap_or("/tmp"),
-                ])
+                .args(["cp", &format!("{tmp_name}:/install.sh"), dest_str])
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
+        let extracted = if cp_install {
+            true
+        } else {
+            created
+                && std::process::Command::new("docker")
+                    .args(["cp", &format!("{tmp_name}:/"), dest_str])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+        };
         let _ = std::process::Command::new("docker")
             .args(["rm", "-f", &tmp_name])
             .status();
@@ -418,7 +429,19 @@ fn install_in_container(
     if ok {
         println!("  Feature {id} installed successfully");
     } else {
-        eprintln!("  Warning: install.sh failed for {id}: {stderr}");
+        let _ = run_output(
+            std::process::Command::new("docker").args([
+                "exec",
+                container,
+                "sh",
+                "-c",
+                &format!("rm -rf {container_path}"),
+            ]),
+            "cleanup",
+        );
+        return Err(BondarError::Docker(format!(
+            "install.sh failed for {id}: {stderr}"
+        )));
     }
 
     // Cleanup the copied files inside the container

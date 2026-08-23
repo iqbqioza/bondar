@@ -317,7 +317,12 @@ impl DevContainerConfig {
                 .chars()
                 .map(|c| if c.is_alphanumeric() { c } else { '-' })
                 .collect();
-            format!("bondar-{sanitized}")
+            let suffix = if sanitized.is_empty() {
+                "workspace".to_string()
+            } else {
+                sanitized
+            };
+            format!("bondar-{suffix}")
         }
     }
 }

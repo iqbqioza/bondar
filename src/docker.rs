@@ -337,7 +337,7 @@ pub fn create_and_start_container(
     cmd.arg("-d");
     cmd.arg("--name").arg(container_name);
 
-    let use_init = config.init.unwrap_or(false) || config.override_command.unwrap_or(true);
+    let use_init = config.init.unwrap_or(false);
     if use_init {
         cmd.arg("--init");
     }
