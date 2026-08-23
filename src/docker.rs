@@ -277,11 +277,12 @@ pub fn create_and_start_container(
     image_name: &str,
     remove_existing: bool,
 ) -> Result<()> {
-    if container_exists(container_name)? {
+    let (exists, running) = container_exists_and_running(container_name)?;
+    if exists {
         if remove_existing {
             println!("Removing existing container {container_name}...");
             remove_container(container_name)?;
-        } else if container_running(container_name)? {
+        } else if running {
             println!("Container {container_name} is already running");
             return Ok(());
         } else {

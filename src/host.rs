@@ -167,6 +167,15 @@ pub fn handle_update_remote_user_uid(
     let host_uid = get_host_uid();
     let host_gid = get_host_gid();
 
+    // Running bondar as root on the host makes UID mapping pointless
+    // (root can access any file) and would map the container user to uid 0.
+    if host_uid == 0 {
+        eprintln!(
+            "Warning: bondar is running as root; skipping updateRemoteUserUID (container user would map to uid 0)"
+        );
+        return Ok(());
+    }
+
     println!("Updating UID/GID for user {user} to {host_uid}:{host_gid} (updateRemoteUserUID)");
 
     let check_user = std::process::Command::new("docker")

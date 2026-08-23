@@ -63,13 +63,18 @@ pub fn run(
     let (was_existing, was_running) = docker::container_exists_and_running(&container_name)?;
 
     // Warn if another container exists for the same workspace (name collision)
-    if let Ok(others) = docker::find_containers_for_workspace(&ws) {
-        for other in others {
-            if other != container_name {
-                eprintln!(
-                    "Warning: existing container '{other}' is bound to this workspace; consider '--remove-existing-container' or a unique 'name'"
-                );
+    match docker::find_containers_for_workspace(&ws) {
+        Ok(others) => {
+            for other in others {
+                if other != container_name {
+                    eprintln!(
+                        "Warning: existing container '{other}' is bound to this workspace; consider '--remove-existing-container' or a unique 'name'"
+                    );
+                }
             }
+        }
+        Err(e) => {
+            eprintln!("Warning: could not check for existing containers: {e}");
         }
     }
 
@@ -165,7 +170,7 @@ pub fn run(
         if let Some(cmd) = &cfg.on_create_command {
             run_lifecycle_step(
                 "onCreateCommand",
-                0,
+                1,
                 wait_idx,
                 cmd,
                 &container_name,
@@ -178,7 +183,7 @@ pub fn run(
         if let Some(cmd) = &cfg.update_content_command {
             run_lifecycle_step(
                 "updateContentCommand",
-                1,
+                2,
                 wait_idx,
                 cmd,
                 &container_name,
@@ -191,7 +196,7 @@ pub fn run(
         if let Some(cmd) = &cfg.post_create_command {
             run_lifecycle_step(
                 "postCreateCommand",
-                2,
+                3,
                 wait_idx,
                 cmd,
                 &container_name,
@@ -207,7 +212,7 @@ pub fn run(
     if should_run_post_start && let Some(cmd) = &cfg.post_start_command {
         run_lifecycle_step(
             "postStartCommand",
-            3,
+            4,
             wait_idx,
             cmd,
             &container_name,
@@ -221,7 +226,7 @@ pub fn run(
     if let Some(cmd) = &cfg.post_attach_command {
         run_lifecycle_step(
             "postAttachCommand",
-            4,
+            5,
             wait_idx,
             cmd,
             &container_name,
@@ -258,7 +263,8 @@ pub fn run(
 }
 
 fn wait_index(wait: &Option<String>) -> usize {
-    const ORDER: [&str; 4] = [
+    const ORDER: [&str; 5] = [
+        "initializeCommand",
         "onCreateCommand",
         "updateContentCommand",
         "postCreateCommand",
@@ -432,9 +438,10 @@ mod tests {
 
     #[test]
     fn test_wait_index_valid() {
-        assert_eq!(wait_index(&Some("onCreateCommand".to_string())), 0);
-        assert_eq!(wait_index(&Some("postCreateCommand".to_string())), 2);
-        assert_eq!(wait_index(&Some("postStartCommand".to_string())), 3);
+        assert_eq!(wait_index(&Some("initializeCommand".to_string())), 0);
+        assert_eq!(wait_index(&Some("onCreateCommand".to_string())), 1);
+        assert_eq!(wait_index(&Some("postCreateCommand".to_string())), 3);
+        assert_eq!(wait_index(&Some("postStartCommand".to_string())), 4);
     }
 
     #[test]

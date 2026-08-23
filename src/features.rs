@@ -52,6 +52,16 @@ pub fn handle_features_with_container(
         return Ok(());
     }
 
+    let has_docker = std::process::Command::new("docker")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_docker {
+        eprintln!("Warning: docker not available, cannot install features");
+        return Ok(());
+    }
+
     println!("Features requested: {} feature(s)", feat_map.len());
     for (id, opts) in feat_map {
         println!("  - {id}: {opts}");
@@ -133,7 +143,9 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
         sorted.push(id.to_string());
     }
 
-    for id in feat_map.keys() {
+    let mut ids: Vec<&String> = feat_map.keys().collect();
+    ids.sort();
+    for id in ids {
         visit(id, feat_map, &mut sorted, &mut visiting, &mut visited);
     }
     sorted
@@ -388,16 +400,6 @@ fn install_feature(
 ) -> Result<()> {
     if !id.contains('/') && !id.contains('.') {
         eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
-        return Ok(());
-    }
-
-    let has_docker = std::process::Command::new("docker")
-        .arg("version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !has_docker {
-        eprintln!("Warning: docker not available, cannot install feature '{id}'");
         return Ok(());
     }
 
