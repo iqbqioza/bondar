@@ -765,7 +765,7 @@ mod tests {
         std::fs::write(&custom, r#"{"image": "debian:12"}"#).unwrap();
         let (cfg3, path3) = load_config(&dir, Some(&custom)).unwrap();
         assert_eq!(cfg3.image.as_deref(), Some("debian:12"));
-        assert_eq!(path3, custom);
+        assert_eq!(path3, custom.canonicalize().unwrap());
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
