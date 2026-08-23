@@ -2,12 +2,17 @@ use crate::error::Result;
 use std::path::Path;
 
 pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path) -> Result<()> {
-    if let Some(cpus) = req.get("cpus").and_then(|v| v.as_u64()) {
-        let available = available_cpus();
-        if available < cpus {
-            eprintln!(
-                "Warning: hostRequirements.cpus {cpus} required but only {available} available"
-            );
+    if let Some(cpus) = req.get("cpus") {
+        if cpus.is_f64() {
+            eprintln!("Warning: hostRequirements.cpus must be an integer, got {cpus}");
+        }
+        if let Some(c) = cpus.as_u64() {
+            let available = available_cpus();
+            if available < c {
+                eprintln!(
+                    "Warning: hostRequirements.cpus {c} required but only {available} available"
+                );
+            }
         }
     }
 

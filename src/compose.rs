@@ -192,6 +192,11 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         env_lines.push((k.clone(), expanded));
     }
     for (k, v) in crate::docker::resolve_secrets(config) {
+        if env_lines.iter().any(|(ek, _)| ek == &k) {
+            eprintln!(
+                "Warning: secret key '{k}' conflicts with an existing environment entry and will override it"
+            );
+        }
         env_lines.push((k, v));
     }
     if !env_lines.is_empty() {

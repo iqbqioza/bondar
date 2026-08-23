@@ -124,6 +124,14 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
             return;
         }
         visiting.insert(id.to_string());
+        if let Some(feat_opts) = feat_map.get(id)
+            && let Some(after) = feat_opts.get("installsAfter")
+            && after.as_array().is_none()
+        {
+            eprintln!(
+                "Warning: feature '{id}' installsAfter must be an array of strings, got {after}"
+            );
+        }
         if let Some(opts) = feat_map.get(id)
             && let Some(arr) = opts.get("installsAfter").and_then(|v| v.as_array())
         {

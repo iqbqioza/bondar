@@ -223,6 +223,26 @@ impl DevContainerConfig {
                 "'workspaceFolder' must be specified when using 'workspaceMount'".to_string(),
             ));
         }
+        if let Some(f) = &self.docker_compose_file {
+            let empty = match f {
+                ComposeFileValue::Single(s) => s.trim().is_empty(),
+                ComposeFileValue::Multiple(v) => {
+                    v.is_empty() || v.iter().any(|s| s.trim().is_empty())
+                }
+            };
+            if empty {
+                return Err(BondarError::Config(
+                    "'dockerComposeFile' must not be empty".to_string(),
+                ));
+            }
+        }
+        if let Some(s) = &self.service
+            && s.trim().is_empty()
+        {
+            return Err(BondarError::Config(
+                "'service' must not be empty".to_string(),
+            ));
+        }
         Ok(())
     }
 

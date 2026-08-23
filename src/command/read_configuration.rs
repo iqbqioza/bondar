@@ -77,12 +77,23 @@ pub fn run(
         errors.push(format!("  {}: {}", e.instance_path, e));
     }
 
-    // Additional cross-field validation
+    // Additional cross-field validation (deduplicated against schema errors)
+    let push_error = |errors: &mut Vec<String>, msg: String| {
+        if !errors.contains(&msg) {
+            errors.push(msg);
+        }
+    };
     if cfg.image.is_none() && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
-        errors.push("  No image/build/dockerComposeFile specified".to_string());
+        push_error(
+            &mut errors,
+            "  No image/build/dockerComposeFile specified".to_string(),
+        );
     }
     if cfg.docker_compose_file.is_some() && cfg.service.is_none() {
-        errors.push("  dockerComposeFile requires service".to_string());
+        push_error(
+            &mut errors,
+            "  dockerComposeFile requires service".to_string(),
+        );
     }
     if let Some(wait) = &cfg.wait_for {
         let valid = [
@@ -93,7 +104,7 @@ pub fn run(
             "postStartCommand",
         ];
         if !valid.contains(&wait.as_str()) {
-            errors.push(format!("  waitFor '{wait}' is invalid"));
+            push_error(&mut errors, format!("  waitFor '{wait}' is invalid"));
         }
     }
 
