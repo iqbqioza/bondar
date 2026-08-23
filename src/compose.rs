@@ -103,10 +103,13 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
             crate::config::ForwardPort::Text(s) => s.clone(),
         };
         if let Some(publish) = crate::docker::publish_port_arg(&port_str) {
-            if crate::docker::is_udp_port(config, &port_str) {
-                ports.push(format!("\"{publish}/udp\""));
+            let entry = if crate::docker::is_udp_port(config, &port_str) {
+                format!("\"{publish}/udp\"")
             } else {
-                ports.push(format!("\"{publish}\""));
+                format!("\"{publish}\"")
+            };
+            if !ports.contains(&entry) {
+                ports.push(entry);
             }
         } else {
             eprintln!(
@@ -123,10 +126,13 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         };
         for p in app_ports {
             if let Some(publish) = crate::docker::publish_port_arg(&p) {
-                if crate::docker::is_udp_port(config, &p) {
-                    ports.push(format!("\"{publish}/udp\""));
+                let entry = if crate::docker::is_udp_port(config, &p) {
+                    format!("\"{publish}/udp\"")
                 } else {
-                    ports.push(format!("\"{publish}\""));
+                    format!("\"{publish}\"")
+                };
+                if !ports.contains(&entry) {
+                    ports.push(entry);
                 }
             } else {
                 eprintln!(

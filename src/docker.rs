@@ -40,6 +40,7 @@ pub fn build_image(
         .dockerfile
         .clone()
         .unwrap_or_else(|| "Dockerfile".to_string());
+    let dockerfile = expand_vars_for_host(&dockerfile, workspace_folder);
     let dockerfile_path = config_dir.join(&dockerfile);
 
     if !dockerfile_path.exists() {
@@ -52,7 +53,10 @@ pub fn build_image(
     let context = build
         .context
         .as_ref()
-        .map(|c| config_dir.join(c))
+        .map(|c| {
+            let expanded = expand_vars_for_host(c, workspace_folder);
+            config_dir.join(&expanded)
+        })
         .unwrap_or_else(|| config_dir.to_path_buf());
 
     let context_str = context.to_string_lossy().to_string();
@@ -80,11 +84,13 @@ pub fn build_image(
     if let Some(cache_from) = &build.cache_from {
         match cache_from {
             crate::config::CacheFromValue::Single(s) => {
-                cmd.arg("--cache-from").arg(s);
+                let expanded = expand_vars_for_host(s, workspace_folder);
+                cmd.arg("--cache-from").arg(expanded);
             }
             crate::config::CacheFromValue::Multiple(vec) => {
                 for s in vec {
-                    cmd.arg("--cache-from").arg(s);
+                    let expanded = expand_vars_for_host(s, workspace_folder);
+                    cmd.arg("--cache-from").arg(expanded);
                 }
             }
         }
@@ -535,7 +541,7 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     let rest = parts.collect::<Vec<_>>();
     // "host:container"
     if rest.len() == 1 {
-        let host_is_ip = first.contains('.') && first.split('.').all(|x| x.parse::<u16>().is_ok());
+        let host_is_ip = is_ipv4(first);
         let host_is_number = first.parse::<u16>().is_ok();
         let container_ok = rest[0].parse::<u16>().is_ok();
         if !container_ok {
@@ -555,12 +561,17 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     }
     // "ip:host:container"
     if rest.len() == 2 {
-        let ip_ok = first.contains('.') && first.split('.').all(|x| x.parse::<u16>().is_ok());
+        let ip_ok = is_ipv4(first);
         if ip_ok && rest[0].parse::<u16>().is_ok() && rest[1].parse::<u16>().is_ok() {
             return Some(spec.to_string());
         }
     }
     None
+}
+
+fn is_ipv4(s: &str) -> bool {
+    let octets: Vec<&str> = s.split('.').collect();
+    octets.len() == 4 && octets.iter().all(|x| x.parse::<u16>().is_ok())
 }
 
 pub fn expand_vars_for_host(input: &str, workspace_folder: &Path) -> String {
@@ -874,6 +885,21 @@ mod tests {
         assert_eq!(publish_port_arg("8080:"), None);
         assert_eq!(publish_port_arg("8080:abc"), None);
         assert_eq!(publish_port_arg(":8080"), None);
+    }
+
+    #[test]
+    fn test_publish_port_arg_partial_ip_rejected() {
+        // 3-octet "IP" is invalid; should not be treated as an IP
+        assert_eq!(publish_port_arg("1.2.3:80"), None);
+    }
+
+    #[test]
+    fn test_is_ipv4() {
+        assert!(is_ipv4("127.0.0.1"));
+        assert!(is_ipv4("0.0.0.0"));
+        assert!(!is_ipv4("1.2.3"));
+        assert!(!is_ipv4("8080"));
+        assert!(!is_ipv4("a.b.c.d"));
     }
 
     #[test]
