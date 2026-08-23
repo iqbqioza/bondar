@@ -208,6 +208,19 @@ impl DevContainerConfig {
                 "'image' and 'build' cannot both be specified".to_string(),
             ));
         }
+        if let Some(img) = &self.image
+            && img.trim().is_empty()
+        {
+            return Err(BondarError::Config("'image' must not be empty".to_string()));
+        }
+        if let Some(build) = &self.build
+            && let Some(df) = &build.dockerfile
+            && df.trim().is_empty()
+        {
+            return Err(BondarError::Config(
+                "'build.dockerfile' must not be empty".to_string(),
+            ));
+        }
         if self.docker_compose_file.is_some() && self.service.is_none() {
             return Err(BondarError::Config(
                 "'service' must be specified when using 'dockerComposeFile'".to_string(),

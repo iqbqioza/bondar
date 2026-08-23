@@ -677,6 +677,11 @@ fn expand_container_env_vars(input: &str) -> String {
                 } else {
                     (rest, None)
                 };
+                if var_name.is_empty() {
+                    eprintln!(
+                        "Warning: '${{containerEnv:}}' has an empty variable name, resolved to empty"
+                    );
+                }
                 let env_val = std::env::var(var_name)
                     .unwrap_or_else(|_| default_val.unwrap_or("").to_string());
                 result.push_str(&env_val);
@@ -927,6 +932,31 @@ mod tests {
         assert_eq!(a.len(), 16);
         let other = devcontainer_id_for(std::path::Path::new("/home/user/other"));
         assert_ne!(a, other);
+    }
+
+    #[test]
+    fn test_expand_local_env_vars_default() {
+        assert_eq!(
+            expand_local_env_vars("${localEnv:UNSET_VAR_XYZ_123:fallback}"),
+            "fallback"
+        );
+        assert_eq!(expand_local_env_vars("${localEnv:UNSET_VAR_XYZ_123}"), "");
+        assert_eq!(
+            expand_local_env_vars("pre${localEnv:UNSET_VAR_XYZ_123:def}post"),
+            "predefpost"
+        );
+    }
+
+    #[test]
+    fn test_expand_container_env_vars_default() {
+        assert_eq!(
+            expand_container_env_vars("${containerEnv:UNSET_VAR_XYZ_123:fallback}"),
+            "fallback"
+        );
+        assert_eq!(
+            expand_container_env_vars("${containerEnv:UNSET_VAR_XYZ_123}"),
+            ""
+        );
     }
 
     #[test]

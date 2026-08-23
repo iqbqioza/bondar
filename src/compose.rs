@@ -300,15 +300,22 @@ pub fn compose_up(
     if no_build {
         cmd.arg("--no-build");
     }
+    let mut seen_services = std::collections::HashSet::new();
     for s in &config.run_services {
-        cmd.arg(s);
+        if seen_services.insert(s.clone()) {
+            cmd.arg(s);
+        } else {
+            eprintln!("Warning: duplicate runServices entry '{s}', skipping");
+        }
     }
     if config.run_services.is_empty()
         && let Some(services) = config.extra.get("runServices").and_then(|v| v.as_array())
     {
         // Legacy fallback for configs parsed before run_services existed
         for s in services {
-            if let Some(name) = s.as_str() {
+            if let Some(name) = s.as_str()
+                && seen_services.insert(name.to_string())
+            {
                 cmd.arg(name);
             }
         }
