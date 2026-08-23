@@ -665,4 +665,46 @@ mod tests {
         assert_eq!(found.file_name().unwrap(), "devcontainer.json");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn test_strip_json_comments_only_comments() {
+        let input = "// only comment\n{}";
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert!(v.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_load_config() {
+        let dir = std::env::temp_dir().join("bondar-load-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        let cfg_path = dir.join(".devcontainer/devcontainer.json");
+
+        std::fs::write(&cfg_path, r#"{"image": "ubuntu:22.04"}"#).unwrap();
+        let (cfg, path) = load_config(&dir, None).unwrap();
+        assert_eq!(cfg.image.as_deref(), Some("ubuntu:22.04"));
+        assert!(path.is_file());
+
+        // BOM is stripped before parsing
+        std::fs::write(&cfg_path, "\u{feff}{\"image\": \"alpine\"}").unwrap();
+        let (cfg2, _) = load_config(&dir, None).unwrap();
+        assert_eq!(cfg2.image.as_deref(), Some("alpine"));
+
+        // Missing config -> error
+        let dir2 = std::env::temp_dir().join("bondar-load-test2");
+        let _ = std::fs::remove_dir_all(&dir2);
+        std::fs::create_dir_all(&dir2).unwrap();
+        assert!(load_config(&dir2, None).is_err());
+
+        // Override config path
+        let custom = dir.join("custom.json");
+        std::fs::write(&custom, r#"{"image": "debian:12"}"#).unwrap();
+        let (cfg3, path3) = load_config(&dir, Some(&custom)).unwrap();
+        assert_eq!(cfg3.image.as_deref(), Some("debian:12"));
+        assert_eq!(path3, custom);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
 }

@@ -554,4 +554,11 @@ mod tests {
         assert_eq!(parse_size("512MB"), Some(512 * 1024 * 1024));
         assert_eq!(parse_size("2TB"), Some(2 * 1024u64.pow(4)));
     }
+
+    #[test]
+    fn test_parse_id_output_empty() {
+        assert_eq!(parse_id_output("", "uid="), None);
+        assert_eq!(parse_id_output("uid=", "uid="), None);
+        assert_eq!(parse_id_output("gid=123", "uid="), None);
+    }
 }

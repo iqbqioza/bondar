@@ -1159,4 +1159,59 @@ mod tests {
         let id = devcontainer_id_for(ws);
         assert_eq!(expanded, format!("ws=/home/user/proj;id={id}"));
     }
+
+    #[test]
+    fn test_resolve_secrets() {
+        // Use a unique env name to avoid interference from parallel tests
+        unsafe {
+            std::env::set_var("BONDAR_TEST_SECRET_VAR", "secret-value");
+        }
+        let cfg = DevContainerConfig {
+            secrets: Some(HashMap::from([
+                (
+                    "MY_SECRET".to_string(),
+                    serde_json::json!({"localEnv": "BONDAR_TEST_SECRET_VAR"}),
+                ),
+                (
+                    "FILE_SECRET".to_string(),
+                    serde_json::json!("/run/secrets/x"),
+                ),
+            ])),
+            ..Default::default()
+        };
+        let resolved = resolve_secrets(&cfg);
+        // FILE_SECRET (file path form) is skipped with a warning
+        assert_eq!(
+            resolved,
+            vec![("MY_SECRET".to_string(), "secret-value".to_string())]
+        );
+        unsafe {
+            std::env::remove_var("BONDAR_TEST_SECRET_VAR");
+        }
+    }
+
+    #[test]
+    fn test_resolve_secrets_unset() {
+        let cfg = DevContainerConfig {
+            secrets: Some(HashMap::from([(
+                "MISSING".to_string(),
+                serde_json::json!({"localEnv": "BONDAR_TEST_UNSET_VAR"}),
+            )])),
+            ..Default::default()
+        };
+        let resolved = resolve_secrets(&cfg);
+        assert!(resolved.is_empty());
+    }
+
+    #[test]
+    fn test_expand_local_env_vars_real_env() {
+        unsafe {
+            std::env::set_var("BONDAR_TEST_ENV_VAR", "real-value");
+        }
+        let expanded = expand_local_env_vars("${localEnv:BONDAR_TEST_ENV_VAR}");
+        assert_eq!(expanded, "real-value");
+        unsafe {
+            std::env::remove_var("BONDAR_TEST_ENV_VAR");
+        }
+    }
 }

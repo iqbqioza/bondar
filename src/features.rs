@@ -633,4 +633,15 @@ mod tests {
         let sorted = sort_by_installs_after(&feat_map);
         assert_eq!(sorted.len(), 1);
     }
+
+    #[test]
+    fn test_sort_by_installs_after_deterministic() {
+        let mut feat_map: HashMap<String, serde_json::Value> = HashMap::new();
+        feat_map.insert("ghcr.io/a/b".to_string(), serde_json::json!({}));
+        feat_map.insert("ghcr.io/a/a".to_string(), serde_json::json!({}));
+        let sorted1 = sort_by_installs_after(&feat_map);
+        let sorted2 = sort_by_installs_after(&feat_map);
+        assert_eq!(sorted1, sorted2);
+        assert_eq!(sorted1, vec!["ghcr.io/a/a", "ghcr.io/a/b"]);
+    }
 }

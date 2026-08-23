@@ -655,4 +655,26 @@ mod tests {
         assert!(path.as_os_str().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn test_compose_files_args_expansion() {
+        let dir = std::env::temp_dir().join("bondar-compose-files");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        std::fs::write(dir.join("docker-compose.yml"), "services: {}").unwrap();
+        let cfg = DevContainerConfig {
+            docker_compose_file: Some(ComposeFileValue::Single(
+                "${localWorkspaceFolder}/docker-compose.yml".to_string(),
+            )),
+            ..Default::default()
+        };
+        let cfg_path = dir.join(".devcontainer/devcontainer.json");
+        let args = compose_files_args(&cfg, &cfg_path, &dir).unwrap();
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[0], "-f");
+        // ${localWorkspaceFolder} expands to the workspace root
+        assert!(args[1].ends_with("docker-compose.yml"));
+        assert!(args[1].starts_with(&dir.to_string_lossy().to_string()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
