@@ -174,7 +174,7 @@ Supported variable expansion:
 | `${containerWorkspaceFolder}` | Container-side workspace path (`workspaceFolder`) |
 | `${containerWorkspaceFolderBasename}` | Base name of the container workspace path |
 | `${localEnv:VAR[:default]}` | Value of the host environment variable |
-| `${containerEnv:VAR[:default]}` | Value of the environment variable (resolved from host before container start) |
+| `${containerEnv:VAR[:default]}` | Value of the environment variable (resolved from `containerEnv` when set, otherwise from the host) |
 | `${devcontainerId}` | Stable identifier derived from the workspace path |
 
 `secrets` supports the `{"localEnv": "VAR"}` form. The file-path string form is warned and skipped.

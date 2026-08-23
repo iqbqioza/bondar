@@ -288,6 +288,24 @@ impl DevContainerConfig {
                 ));
             }
         }
+        if let Some(feats) = &self.features {
+            for id in feats.keys() {
+                if id.trim().is_empty() {
+                    return Err(BondarError::Config(
+                        "'features' keys must not be empty".to_string(),
+                    ));
+                }
+            }
+        }
+        if let Some(secrets) = &self.secrets {
+            for key in secrets.keys() {
+                if key.trim().is_empty() {
+                    return Err(BondarError::Config(
+                        "'secrets' keys must not be empty".to_string(),
+                    ));
+                }
+            }
+        }
         for port in &self.forward_ports {
             if let ForwardPort::Number(n) = port
                 && *n == 0

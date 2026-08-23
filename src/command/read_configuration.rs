@@ -4,7 +4,7 @@ use jsonschema::Validator;
 
 use crate::config;
 use crate::docker;
-use crate::error::Result;
+use crate::error::{BondarError, Result};
 
 static SCHEMA_JSON: &str = include_str!("../schemas/devcontainer.schema.json");
 
@@ -14,11 +14,53 @@ pub fn run(
     include_merged_configuration: bool,
 ) -> Result<()> {
     let ws = docker::get_workspace_folder(workspace_folder)?;
-    let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+
+    // Determine the config path without validating, so read-configuration can
+    // report every problem instead of failing on the first one.
+    let cfg_path = if let Some(p) = &config_path {
+        p.canonicalize().map_err(|e| {
+            BondarError::NotFound(format!("Cannot resolve config path {}: {e}", p.display()))
+        })?
+    } else if let Some(p) = config::find_config_path(&ws) {
+        p
+    } else {
+        return Err(BondarError::NotFound(format!(
+            "devcontainer.json not found in {}",
+            ws.display()
+        )));
+    };
 
     println!("Config file: {}", cfg_path.display());
     println!("Workspace: {}", ws.display());
     println!();
+
+    let raw = std::fs::read_to_string(&cfg_path).map_err(BondarError::Io)?;
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    let stripped = config::strip_json_comments(raw);
+    let raw_value: serde_json::Value = serde_json::from_str(&stripped)
+        .map_err(|e| BondarError::Config(format!("Invalid JSON: {e}")))?;
+
+    let mut errors: Vec<String> = Vec::new();
+
+    // Strict JSON Schema validation against the official devcontainer schema.
+    let schema: serde_json::Value = serde_json::from_str(SCHEMA_JSON)
+        .map_err(|e| BondarError::Config(format!("Schema parse error: {e}")))?;
+    let validator = Validator::options()
+        .with_draft(jsonschema::Draft::Draft201909)
+        .build(&schema)
+        .map_err(|e| BondarError::Config(format!("Schema build error: {e}")))?;
+    for e in validator.iter_errors(&raw_value) {
+        errors.push(format!("  {}: {}", e.instance_path, e));
+    }
+
+    // Typed parse; type errors are reported as validation errors
+    let cfg: config::DevContainerConfig = match serde_json::from_str(&stripped) {
+        Ok(c) => c,
+        Err(e) => {
+            errors.push(format!("  {e}"));
+            config::DevContainerConfig::default()
+        }
+    };
 
     let json = serde_json::to_string_pretty(&cfg).unwrap_or_else(|_| "{}".to_string());
     println!("{json}");
@@ -54,27 +96,6 @@ pub fn run(
             }
             println!("  {k}: {v}");
         }
-    }
-
-    // Strict JSON Schema validation against the official devcontainer schema.
-    // Validate the raw file contents (after comment stripping), not the
-    // serialized struct which contains all fields including nulls.
-    let mut errors: Vec<String> = Vec::new();
-    let raw = std::fs::read_to_string(&cfg_path).map_err(crate::error::BondarError::Io)?;
-    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
-    let stripped = crate::config::strip_json_comments(raw);
-    let raw_value: serde_json::Value = serde_json::from_str(&stripped)
-        .map_err(|e| crate::error::BondarError::Config(format!("Invalid JSON: {e}")))?;
-
-    let schema: serde_json::Value = serde_json::from_str(SCHEMA_JSON)
-        .map_err(|e| crate::error::BondarError::Config(format!("Schema parse error: {e}")))?;
-    let validator = Validator::options()
-        .with_draft(jsonschema::Draft::Draft201909)
-        .build(&schema)
-        .map_err(|e| crate::error::BondarError::Config(format!("Schema build error: {e}")))?;
-
-    for e in validator.iter_errors(&raw_value) {
-        errors.push(format!("  {}: {}", e.instance_path, e));
     }
 
     // Additional cross-field validation (deduplicated against schema errors)
@@ -167,6 +188,23 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     for (k, v) in cfg.container_env.iter().chain(cfg.remote_env.iter()) {
         let expanded = docker::expand_vars_for_host_with_target(v, ws, &target);
         env.insert(k.clone(), Value::String(expanded));
+    }
+    // Resolve ${containerEnv:KEY} references from the original values against
+    // the containerEnv entries (same two-pass approach as docker run)
+    let container_env_map: std::collections::HashMap<String, String> = cfg
+        .container_env
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                docker::expand_vars_for_host_with_target(v, ws, &target),
+            )
+        })
+        .collect();
+    for (k, v) in &cfg.container_env {
+        let from_map = docker::expand_container_env_from_map(v, &container_env_map);
+        let resolved = docker::expand_vars_for_host_with_target(&from_map, ws, &target);
+        env.insert(k.clone(), Value::String(resolved));
     }
     for (k, v) in docker::resolve_secrets(cfg) {
         env.insert(k, Value::String(v));

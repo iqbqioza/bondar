@@ -158,7 +158,7 @@ The override file is written to the OS temp directory by `compose_base_command`.
 
 ### `${containerEnv:VAR}` does not work as expected
 
-**Cause:** bondar resolves `${containerEnv:...}` from the host before the container exists. If you need the *container's* environment, use `remoteEnv` with a literal value or script that runs in the container.
+**Cause:** for variables set in the same `containerEnv`, bondar resolves them from `containerEnv`. For anything else it falls back to the host environment, because the container does not exist yet at expansion time. If you need the *container's* runtime environment, use `remoteEnv` with a literal value or a script that runs in the container.
 
 ## Ports
 

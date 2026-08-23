@@ -216,10 +216,22 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     // Build env lines first so an empty `environment:` key is never emitted
     // (e.g. when secrets contain only file-path entries that cannot be resolved).
     let mut env_lines: Vec<(String, String)> = Vec::new();
+    // Resolve in two passes so ${containerEnv:KEY} works regardless of map order
+    let mut expanded_env: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     for (k, v) in &config.container_env {
         let expanded =
             crate::docker::expand_vars_for_host_with_target(v, workspace_folder, &container_target);
-        env_lines.push((k.clone(), expanded));
+        expanded_env.insert(k.clone(), expanded);
+    }
+    for (k, v) in &config.container_env {
+        let from_map = crate::docker::expand_container_env_from_map(v, &expanded_env);
+        let resolved = crate::docker::expand_vars_for_host_with_target(
+            &from_map,
+            workspace_folder,
+            &container_target,
+        );
+        env_lines.push((k.clone(), resolved));
     }
     for (k, v) in crate::docker::resolve_secrets(config) {
         if env_lines.iter().any(|(ek, _)| ek == &k) {
@@ -280,9 +292,8 @@ fn compose_base_command(
     for arg in compose_files_args(config, config_path, workspace_folder)? {
         cmd.arg(arg);
     }
-    if let Ok(override_path) = write_compose_override(config, workspace_folder)
-        && !override_path.as_os_str().is_empty()
-    {
+    let override_path = write_compose_override(config, workspace_folder)?;
+    if !override_path.as_os_str().is_empty() {
         cmd.arg("-f").arg(override_path);
     }
     Ok(cmd)
@@ -685,7 +696,7 @@ mod tests {
         let path = write_compose_override(&cfg, &dir).unwrap();
         assert!(!path.as_os_str().is_empty());
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("- \"8080:8080\""));
+        assert!(content.contains("- \"0.0.0.0:8080:8080\""));
         assert!(content.contains("- \"/host:/data:ro\""));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
@@ -735,7 +746,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("  app:"));
         assert!(content.contains("FOO: \"bar\""));
-        assert!(content.contains("- \"8080:8080\""));
+        assert!(content.contains("- \"0.0.0.0:8080:8080\""));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
     }

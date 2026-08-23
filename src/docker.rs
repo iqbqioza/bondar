@@ -434,15 +434,25 @@ pub fn create_and_start_container(
             }
         }
     }
-
     // Env - containerEnv is set on the container; remoteEnv applies only at exec time
+    // Pass 1: expand generic vars (${containerEnv:...} may be consumed here)
+    let mut expanded_env: HashMap<String, String> = HashMap::new();
     for (k, v) in &config.container_env {
         let expanded_v = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
-        cmd.arg("-e").arg(format!("{k}={expanded_v}"));
+        expanded_env.insert(k.clone(), expanded_v);
+    }
+    // Pass 2: resolve ${containerEnv:KEY} from the original values against the
+    // expanded map, then apply generic expansion to the substituted result
+    for (k, v) in &config.container_env {
+        let from_map = expand_container_env_from_map(v, &expanded_env);
+        let resolved =
+            expand_vars_for_host_with_target(&from_map, workspace_folder, &workspace_target);
+        cmd.arg("-e").arg(format!("{k}={resolved}"));
     }
 
     // Secrets resolved from local env (devcontainer spec: { "MY_SECRET": { "localEnv": "VAR" } })
-    for (k, v) in resolve_secrets(config) {
+    let resolved_secrets = resolve_secrets(config);
+    for (k, v) in &resolved_secrets {
         cmd.arg("-e").arg(format!("{k}={v}"));
     }
 
@@ -621,10 +631,12 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     if spec.is_empty() {
         return None;
     }
-    // No colon: single port or range -> host:container with the same spec
+    // No colon: single port or range -> publish on all interfaces.
+    // The explicit 0.0.0.0 works around rootless Docker 29 (slirp4netns)
+    // failing to parse the bare "hostPort:containerPort" form.
     if !spec.contains(':') {
         if is_port_or_range(spec) {
-            return Some(format!("{spec}:{spec}"));
+            return Some(format!("0.0.0.0:{spec}:{spec}"));
         }
         return None;
     }
@@ -645,8 +657,8 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
             return Some(format!("{spec}:{}", rest[0]));
         }
         if host_is_number {
-            // "8080:80" -> "8080:80" (also ranges "8080-8085:8080-8085")
-            return Some(spec.to_string());
+            // "8080:80" -> "0.0.0.0:8080:80" (also ranges "8080-8085:8080-8085")
+            return Some(format!("0.0.0.0:{spec}"));
         }
         // "db:5432" -> service host, cannot publish
         return None;
@@ -662,6 +674,10 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
 }
 
 fn is_port_or_range(s: &str) -> bool {
+    // Reject bare "0": docker interprets a 0 host port as a random port
+    if s == "0" {
+        return false;
+    }
     if s.parse::<u16>().is_ok() {
         return true;
     }
@@ -754,6 +770,17 @@ fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
     }
     let id = devcontainer_id_for(workspace_folder);
     input.replace("${devcontainerId}", &id)
+}
+
+/// Resolve `${containerEnv:KEY}` references against a host-side map (e.g. the
+/// already-processed `containerEnv` entries). Unmatched keys fall through to
+/// the generic (host-based) `expand_container_env_vars`.
+pub fn expand_container_env_from_map(input: &str, env_map: &HashMap<String, String>) -> String {
+    let mut result = input.to_string();
+    for (k, v) in env_map {
+        result = result.replace(&format!("${{containerEnv:{k}}}"), v);
+    }
+    result
 }
 
 fn expand_container_env_vars(input: &str) -> String {
@@ -970,12 +997,18 @@ mod tests {
 
     #[test]
     fn test_publish_port_arg_number() {
-        assert_eq!(publish_port_arg("8080"), Some("8080:8080".to_string()));
+        assert_eq!(
+            publish_port_arg("8080"),
+            Some("0.0.0.0:8080:8080".to_string())
+        );
     }
 
     #[test]
     fn test_publish_port_arg_host_container() {
-        assert_eq!(publish_port_arg("8080:80"), Some("8080:80".to_string()));
+        assert_eq!(
+            publish_port_arg("8080:80"),
+            Some("0.0.0.0:8080:80".to_string())
+        );
     }
 
     #[test]
@@ -1034,11 +1067,11 @@ mod tests {
     fn test_publish_port_arg_range() {
         assert_eq!(
             publish_port_arg("8080-8085"),
-            Some("8080-8085:8080-8085".to_string())
+            Some("0.0.0.0:8080-8085:8080-8085".to_string())
         );
         assert_eq!(
             publish_port_arg("8080-8085:8080-8085"),
-            Some("8080-8085:8080-8085".to_string())
+            Some("0.0.0.0:8080-8085:8080-8085".to_string())
         );
         assert_eq!(
             publish_port_arg("127.0.0.1:8080-8085"),
@@ -1047,7 +1080,7 @@ mod tests {
         // Host range with single container port
         assert_eq!(
             publish_port_arg("8080-8085:8080"),
-            Some("8080-8085:8080".to_string())
+            Some("0.0.0.0:8080-8085:8080".to_string())
         );
     }
 
@@ -1160,6 +1193,20 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_container_env_from_map() {
+        let map = HashMap::from([("A".to_string(), "x".to_string())]);
+        assert_eq!(
+            expand_container_env_from_map("${containerEnv:A}-y", &map),
+            "x-y"
+        );
+        // Unmatched keys fall through untouched (resolved later from host)
+        assert_eq!(
+            expand_container_env_from_map("${containerEnv:UNSET:fb}", &map),
+            "${containerEnv:UNSET:fb}"
+        );
+    }
+
+    #[test]
     fn test_expand_env_vars_empty_default() {
         assert_eq!(expand_local_env_vars("${localEnv:UNSET_VAR_XYZ_123:}"), "");
         assert_eq!(
@@ -1240,8 +1287,10 @@ mod tests {
 
     #[test]
     fn test_publish_port_arg_zero() {
-        assert_eq!(publish_port_arg("0"), Some("0:0".to_string()));
-        assert_eq!(publish_port_arg("0:0"), Some("0:0".to_string()));
+        // Port 0 is rejected (docker would treat it as a random port)
+        assert_eq!(publish_port_arg("0"), None);
+        assert_eq!(publish_port_arg("0:0"), None);
+        assert_eq!(publish_port_arg("8080:0"), None);
     }
 
     #[test]
@@ -1406,11 +1455,11 @@ mod tests {
     fn test_publish_port_arg_udp_suffix() {
         assert_eq!(
             publish_port_arg("8080:8080/udp"),
-            Some("8080:8080/udp".to_string())
+            Some("0.0.0.0:8080:8080/udp".to_string())
         );
         assert_eq!(
             publish_port_arg("8080/udp"),
-            Some("8080:8080/udp".to_string())
+            Some("0.0.0.0:8080:8080/udp".to_string())
         );
         assert_eq!(
             publish_port_arg("127.0.0.1:9090/udp"),
