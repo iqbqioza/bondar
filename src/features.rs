@@ -537,6 +537,7 @@ mod tests {
         // Unicode alphanumerics are preserved
         assert_eq!(sanitize_id("日本語"), "日本語");
         assert_ne!(sanitize_id("ghcr.io/a/b"), sanitize_id("ghcr.io/a_b"));
+        assert_eq!(sanitize_id(""), "");
     }
 
     #[test]
@@ -588,9 +589,16 @@ mod tests {
         std::fs::write(dir3.join("devcontainer-feature.json"), "not json").unwrap();
         assert!(read_feature_metadata(&dir3).is_none());
 
+        // A directory named like the metadata file -> None (is_file)
+        let dir4 = std::env::temp_dir().join("bondar-feature-meta-test4");
+        let _ = std::fs::remove_dir_all(&dir4);
+        std::fs::create_dir_all(dir4.join("devcontainer-feature.json")).unwrap();
+        assert!(read_feature_metadata(&dir4).is_none());
+
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
         let _ = std::fs::remove_dir_all(&dir3);
+        let _ = std::fs::remove_dir_all(&dir4);
     }
 
     #[test]
@@ -655,5 +663,38 @@ mod tests {
         let sorted2 = sort_by_installs_after(&feat_map);
         assert_eq!(sorted1, sorted2);
         assert_eq!(sorted1, vec!["ghcr.io/a/a", "ghcr.io/a/b"]);
+    }
+
+    #[test]
+    fn test_sort_by_installs_after_empty() {
+        let empty: HashMap<String, serde_json::Value> = HashMap::new();
+        assert!(sort_by_installs_after(&empty).is_empty());
+    }
+
+    #[test]
+    fn test_collect_feature_customizations() {
+        // Place metadata under the feature cache dir with a unique id
+        let id = "ghcr.io/test/feature";
+        let dir = feature_cache_dir().join(sanitize_id(id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("devcontainer-feature.json"),
+            r#"{"customizations": {"vscode": {"settings": {"a": 1}}}}"#,
+        )
+        .unwrap();
+        let features = Some(HashMap::from([(id.to_string(), serde_json::json!({}))]));
+        let merged = collect_feature_customizations(&features);
+        assert_eq!(merged["vscode"]["settings"]["a"], 1);
+
+        // No features -> empty object
+        assert!(
+            collect_feature_customizations(&None)
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -674,6 +674,24 @@ mod tests {
     }
 
     #[test]
+    fn test_config_serialize_roundtrip() {
+        let cfg = DevContainerConfig {
+            name: Some("test".to_string()),
+            image: Some("ubuntu:22.04".to_string()),
+            forward_ports: vec![
+                ForwardPort::Number(8080),
+                ForwardPort::Text("db:5432".to_string()),
+            ],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: DevContainerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, cfg.name);
+        assert_eq!(back.image, cfg.image);
+        assert_eq!(back.forward_ports.len(), 2);
+    }
+
+    #[test]
     fn test_container_name_uppercase() {
         let cfg = DevContainerConfig {
             name: Some("MyProject".to_string()),

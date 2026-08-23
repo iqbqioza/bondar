@@ -550,6 +550,7 @@ mod tests {
         assert_eq!(format_bytes(1024 * 1024), "1.0mb");
         assert_eq!(format_bytes(5 * 1024 * 1024 * 1024), "5.0gb");
         assert_eq!(format_bytes(2 * 1024u64.pow(4)), "2.0tb");
+        assert_eq!(format_bytes(0), "0b");
     }
 
     #[test]
@@ -569,6 +570,7 @@ mod tests {
         assert_eq!(parse_size("10b"), None);
         assert_eq!(parse_size("gb"), None);
         assert_eq!(parse_size(""), None);
+        assert_eq!(parse_size("1.5"), None);
     }
 
     #[test]
@@ -582,5 +584,12 @@ mod tests {
     #[test]
     fn test_get_host_uid() {
         assert!(get_host_uid() > 0);
+    }
+
+    #[test]
+    fn test_check_host_requirements_no_req() {
+        // No requirements -> always Ok (warnings only)
+        assert!(check_host_requirements(&serde_json::json!({}), Path::new(".")).is_ok());
+        assert!(check_host_requirements(&serde_json::json!({"cpus": 1}), Path::new(".")).is_ok());
     }
 }

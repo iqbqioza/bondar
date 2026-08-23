@@ -524,5 +524,6 @@ mod tests {
         );
         assert_eq!(wait_index(&Some("bogus".to_string())), usize::MAX);
         assert_eq!(wait_index(&None), usize::MAX);
+        assert_eq!(wait_index(&Some(String::new())), usize::MAX);
     }
 }

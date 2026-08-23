@@ -1030,6 +1030,11 @@ mod tests {
             publish_port_arg("127.0.0.1:8080-8085"),
             Some("127.0.0.1:8080-8085:8080-8085".to_string())
         );
+        // Host range with single container port
+        assert_eq!(
+            publish_port_arg("8080-8085:8080"),
+            Some("8080-8085:8080".to_string())
+        );
     }
 
     #[test]
@@ -1277,6 +1282,97 @@ mod tests {
         unsafe {
             std::env::remove_var("BONDAR_TEST_ENV_VAR");
         }
+    }
+
+    #[test]
+    fn test_expand_container_env_vars_real_env() {
+        unsafe {
+            std::env::set_var("BONDAR_TEST_CENV", "cv");
+        }
+        let expanded = expand_container_env_vars("${containerEnv:BONDAR_TEST_CENV}");
+        assert_eq!(expanded, "cv");
+        unsafe {
+            std::env::remove_var("BONDAR_TEST_CENV");
+        }
+    }
+
+    #[test]
+    fn test_get_workspace_folder() {
+        let dir = std::env::temp_dir().join("bondar-ws-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Existing directory -> canonicalized
+        let got = get_workspace_folder(Some(dir.clone())).unwrap();
+        assert_eq!(got, dir.canonicalize().unwrap());
+
+        // Missing path -> error
+        let missing = std::env::temp_dir().join("bondar-ws-missing");
+        assert!(get_workspace_folder(Some(missing)).is_err());
+
+        // File instead of directory -> error
+        let file = std::env::temp_dir().join("bondar-ws-file.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert!(get_workspace_folder(Some(file.clone())).is_err());
+        let _ = std::fs::remove_file(&file);
+
+        // None -> current directory
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(get_workspace_folder(None).unwrap(), cwd);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_resolve_image_name() {
+        // Build with name -> bondar-{sanitized-lowercase}
+        let build_cfg = DevContainerConfig {
+            name: Some("My Dev".to_string()),
+            build: Some(crate::config::BuildConfig {
+                dockerfile: Some("Dockerfile".to_string()),
+                context: None,
+                args: Default::default(),
+                options: vec![],
+                target: None,
+                cache_from: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_image_name(&build_cfg, std::path::Path::new("/tmp/x")).unwrap(),
+            "bondar-my-dev"
+        );
+
+        // Build without name -> bondar-{basename}
+        let build_unnamed = DevContainerConfig {
+            build: Some(crate::config::BuildConfig {
+                dockerfile: Some("Dockerfile".to_string()),
+                context: None,
+                args: Default::default(),
+                options: vec![],
+                target: None,
+                cache_from: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_image_name(&build_unnamed, std::path::Path::new("/tmp/my-proj")).unwrap(),
+            "bondar-my-proj"
+        );
+
+        // Image -> as-is
+        let image_cfg = DevContainerConfig {
+            image: Some("ubuntu:22.04".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_image_name(&image_cfg, std::path::Path::new("/tmp/x")).unwrap(),
+            "ubuntu:22.04"
+        );
+
+        // Neither -> error
+        let empty = DevContainerConfig::default();
+        assert!(resolve_image_name(&empty, std::path::Path::new("/tmp/x")).is_err());
     }
 
     #[test]

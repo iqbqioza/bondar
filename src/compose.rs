@@ -613,6 +613,7 @@ mod tests {
         assert_eq!(escape_yaml_value("plain"), "plain");
         assert_eq!(escape_yaml_value("a\tb\rc"), "a\\tb\\rc");
         assert_eq!(escape_yaml_value(""), "");
+        assert_eq!(escape_yaml_value("a$b"), "a$b");
     }
 
     #[test]
@@ -767,6 +768,23 @@ mod tests {
         assert!(args[1].ends_with("a.yml"));
         assert_eq!(args[2], "-f");
         assert!(args[3].ends_with("b.yml"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_compose_files_args_for_build() {
+        let dir = std::env::temp_dir().join("bondar-compose-build");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        std::fs::write(dir.join("docker-compose.yml"), "services: {}").unwrap();
+        let cfg = DevContainerConfig {
+            docker_compose_file: Some(ComposeFileValue::Single("docker-compose.yml".to_string())),
+            ..Default::default()
+        };
+        let cfg_path = dir.join(".devcontainer/devcontainer.json");
+        let args = compose_files_args_for_build(&cfg, &cfg_path, &dir).unwrap();
+        assert_eq!(args.len(), 2);
+        assert!(args[1].ends_with("docker-compose.yml"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

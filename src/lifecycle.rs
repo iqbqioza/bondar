@@ -353,4 +353,39 @@ mod tests {
         let cfg = crate::config::DevContainerConfig::default();
         assert!(lifecycle_summary(&cfg).is_empty());
     }
+
+    #[test]
+    fn test_execute_host_lifecycle_string() {
+        let ws = std::env::temp_dir().join("bondar-lifecycle-test");
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(&ws).unwrap();
+
+        assert!(execute_host_lifecycle(&json!("echo hello"), &ws).is_ok());
+        // Failure propagates
+        assert!(execute_host_lifecycle(&json!("exit 1"), &ws).is_err());
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn test_execute_host_lifecycle_variants() {
+        let ws = std::env::temp_dir().join("bondar-lifecycle-test2");
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(&ws).unwrap();
+
+        // Array
+        assert!(execute_host_lifecycle(&json!(["echo", "hi"]), &ws).is_ok());
+        // Empty array
+        assert!(execute_host_lifecycle(&serde_json::json!([]), &ws).is_ok());
+        // Object (sequential keys)
+        assert!(execute_host_lifecycle(&json!({"a": "echo a", "b": ["echo", "b"]}), &ws).is_ok());
+        // Null
+        assert!(execute_host_lifecycle(&serde_json::Value::Null, &ws).is_ok());
+        // Invalid type
+        assert!(execute_host_lifecycle(&serde_json::json!(123), &ws).is_err());
+        // Non-string array elements
+        assert!(execute_host_lifecycle(&serde_json::json!([123, 456]), &ws).is_err());
+
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 }

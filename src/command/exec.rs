@@ -95,3 +95,25 @@ pub fn compose_exec_env(
         Some(cfg.remote_env.clone())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_merged_exec_env_without_probe() {
+        let cfg = config::DevContainerConfig {
+            remote_env: std::collections::HashMap::from([("A".to_string(), "1".to_string())]),
+            ..Default::default()
+        };
+        let env = merged_exec_env(&cfg, "container", None).unwrap();
+        assert_eq!(env.get("A").unwrap(), "1");
+        assert_eq!(env.len(), 1);
+    }
+
+    #[test]
+    fn test_merged_exec_env_empty() {
+        let cfg = config::DevContainerConfig::default();
+        assert!(merged_exec_env(&cfg, "container", None).is_none());
+    }
+}
