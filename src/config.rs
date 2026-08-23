@@ -273,6 +273,8 @@ impl DevContainerConfig {
         Ok(())
     }
 
+    /// Default container workspace folder for image/Dockerfile configurations.
+    /// Compose configurations use "/" as their default (handled by callers).
     pub fn workspace_folder_or_default(&self) -> String {
         self.workspace_folder
             .clone()
@@ -441,6 +443,14 @@ mod tests {
         let stripped = strip_json_comments(input);
         let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
         assert_eq!(v["text"], "a /* not a comment */ b // also not");
+    }
+
+    #[test]
+    fn test_preserve_escaped_quotes_in_string() {
+        let input = r#"{"text": "say \"hello\" // not a comment"}"#;
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(v["text"], "say \"hello\" // not a comment");
     }
 
     #[test]
