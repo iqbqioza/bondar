@@ -457,7 +457,7 @@ pub fn create_and_start_container(
             continue;
         }
         if let Some(mut publish) = publish_port_arg(&port_str) {
-            if is_udp_port(config, &port_str) {
+            if is_udp_port(config, &port_str) && !publish.ends_with("/udp") {
                 publish.push_str("/udp");
             }
             cmd.arg("-p").arg(publish);
@@ -481,7 +481,7 @@ pub fn create_and_start_container(
                 continue;
             }
             if let Some(mut publish) = publish_port_arg(&p) {
-                if is_udp_port(config, &p) {
+                if is_udp_port(config, &p) && !publish.ends_with("/udp") {
                     publish.push_str("/udp");
                 }
                 cmd.arg("-p").arg(publish);
@@ -530,8 +530,12 @@ fn port_value_to_string(p: &crate::config::PortValue) -> String {
 }
 
 pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
-    // Determine the container port portion of the spec
-    let container_port = port_spec.rsplit(':').next().unwrap_or(port_spec);
+    // Determine the container port portion of the spec (strip /udp suffix)
+    let container_port = port_spec
+        .rsplit(':')
+        .next()
+        .unwrap_or(port_spec)
+        .trim_end_matches("/udp");
     // Explicit per-port attributes take precedence
     if let Some(attrs) = &config.ports_attributes
         && let Some(entry) = attrs.get(container_port)
@@ -552,7 +556,11 @@ pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
 
 /// Whether `onAutoForward: "ignore"` disables publishing for the port.
 pub fn is_port_ignored(config: &DevContainerConfig, port_spec: &str) -> bool {
-    let container_port = port_spec.rsplit(':').next().unwrap_or(port_spec);
+    let container_port = port_spec
+        .rsplit(':')
+        .next()
+        .unwrap_or(port_spec)
+        .trim_end_matches("/udp");
     if let Some(attrs) = &config.ports_attributes
         && let Some(entry) = attrs.get(container_port)
         && let Some(obj) = entry.as_object()
@@ -1178,6 +1186,19 @@ mod tests {
     }
 
     #[test]
+    fn test_is_udp_port_with_udp_suffix() {
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(serde_json::json!({
+                "3000": {"protocol": "udp"}
+            })),
+            ..Default::default()
+        };
+        // /udp suffix must still match the plain port key in attributes
+        assert!(is_udp_port(&cfg, "3000/udp"));
+        assert!(is_udp_port(&cfg, "127.0.0.1:3000/udp"));
+    }
+
+    #[test]
     fn test_is_port_ignored() {
         let cfg = DevContainerConfig {
             ports_attributes: Some(serde_json::json!({
@@ -1390,6 +1411,10 @@ mod tests {
         assert_eq!(
             publish_port_arg("8080/udp"),
             Some("8080:8080/udp".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("127.0.0.1:9090/udp"),
+            Some("127.0.0.1:9090:9090/udp".to_string())
         );
     }
 

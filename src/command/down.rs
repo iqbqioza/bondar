@@ -34,6 +34,18 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             docker::stop_container(&container_name)?;
             println!("Container {container_name} stopped (kept for reuse)");
         }
+        "stopCompose" => {
+            eprintln!(
+                "Warning: shutdownAction 'stopCompose' requires dockerComposeFile; treating as remove"
+            );
+            if !docker::container_exists(&container_name)? {
+                println!("Container {container_name} does not exist");
+                return Ok(());
+            }
+            println!("Removing container {container_name}...");
+            docker::remove_container(&container_name)?;
+            println!("Container {container_name} removed");
+        }
         _ => {
             if !docker::container_exists(&container_name)? {
                 println!("Container {container_name} does not exist");

@@ -120,11 +120,12 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 );
                 continue;
             }
-            let entry = if crate::docker::is_udp_port(config, &port_str) {
-                format!("\"{publish}/udp\"")
-            } else {
-                format!("\"{publish}\"")
-            };
+            let entry =
+                if crate::docker::is_udp_port(config, &port_str) && !publish.ends_with("/udp") {
+                    format!("\"{publish}/udp\"")
+                } else {
+                    format!("\"{publish}\"")
+                };
             if !ports.contains(&entry) {
                 ports.push(entry);
             }
@@ -147,7 +148,8 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 continue;
             }
             if let Some(publish) = crate::docker::publish_port_arg(&p) {
-                let entry = if crate::docker::is_udp_port(config, &p) {
+                let entry = if crate::docker::is_udp_port(config, &p) && !publish.ends_with("/udp")
+                {
                     format!("\"{publish}/udp\"")
                 } else {
                     format!("\"{publish}\"")
@@ -177,6 +179,13 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 }
             }
             MountValue::Object(obj) => {
+                // tmpfs mounts have no short-syntax equivalent in compose
+                if obj.mount_type.as_deref() == Some("tmpfs") {
+                    eprintln!(
+                        "Warning: tmpfs mount is skipped in compose override (no short-syntax equivalent)"
+                    );
+                    continue;
+                }
                 if let Some(target) = &obj.target {
                     let mut vol = String::new();
                     if let Some(source) = &obj.source {
@@ -290,6 +299,8 @@ fn escape_yaml_value(input: &str) -> String {
     input
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
+        // `$$` renders a literal `$` in compose, preventing `${VAR}` expansion
+        .replace('$', "$$")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
         .replace('\t', "\\t")
@@ -604,7 +615,7 @@ mod tests {
         assert_eq!(escape_yaml_value("plain"), "plain");
         assert_eq!(escape_yaml_value("a\tb\rc"), "a\\tb\\rc");
         assert_eq!(escape_yaml_value(""), "");
-        assert_eq!(escape_yaml_value("a$b"), "a$b");
+        assert_eq!(escape_yaml_value("a$b"), "a$$b");
     }
 
     #[test]
@@ -614,6 +625,33 @@ mod tests {
         assert_eq!(escape_yaml_key(""), "\"\"");
         assert_eq!(escape_yaml_key("123"), "123");
         assert_eq!(escape_yaml_key("key:with:colon"), "\"key:with:colon\"");
+    }
+
+    #[test]
+    fn test_escape_yaml_value_dollar() {
+        assert_eq!(escape_yaml_value("a${VAR}b"), "a$${VAR}b");
+        assert_eq!(escape_yaml_value("plain"), "plain");
+        assert_eq!(escape_yaml_value("a\"b$"), "a\\\"b$$");
+    }
+
+    #[test]
+    fn test_tmpfs_object_mount_skipped_in_override() {
+        let dir = std::env::temp_dir().join("bondar-ovr-test4");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            mounts: vec![MountValue::Object(MountObject {
+                source: None,
+                target: Some("/tmp".to_string()),
+                mount_type: Some("tmpfs".to_string()),
+                readonly: None,
+            })],
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        assert!(path.as_os_str().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
