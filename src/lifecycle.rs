@@ -375,6 +375,8 @@ mod tests {
     }
 
     #[test]
+    // The child is reaped by reap_children() below, which the lint cannot see.
+    #[allow(clippy::zombie_processes)]
     fn test_reap_children() {
         // Spawn a short-lived child and verify it is reaped
         let child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();

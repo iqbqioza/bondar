@@ -460,13 +460,9 @@ fn test_compose_stop_action() {
     assert!(String::from_utf8_lossy(&down.stdout).contains("compose stop"));
 
     // Cleanup leftover compose project
+    let ws_str = ws.join("docker-compose.yml").to_str().unwrap().to_string();
     let _ = Command::new("docker")
-        .args([
-            "compose",
-            "-f",
-            &ws.join("docker-compose.yml").to_str().unwrap(),
-            "down",
-        ])
+        .args(["compose", "-f", &ws_str, "down"])
         .current_dir(&ws)
         .output();
     cleanup(&ws);
