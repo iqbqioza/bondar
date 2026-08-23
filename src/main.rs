@@ -1,8 +1,10 @@
 mod cli;
 mod command;
+mod compose;
 mod config;
 mod docker;
 mod error;
+mod host;
 mod lifecycle;
 
 use clap::Parser;
@@ -44,6 +46,16 @@ fn main() {
             workspace_folder,
             config,
         } => command::shell::run(workspace_folder, config),
+        Commands::Logs {
+            workspace_folder,
+            config,
+            follow,
+            tail,
+        } => command::logs::run(workspace_folder, config, follow, tail),
+        Commands::ReadConfiguration {
+            workspace_folder,
+            config,
+        } => command::read_configuration::run(workspace_folder, config),
     };
 
     if let Err(e) = result {

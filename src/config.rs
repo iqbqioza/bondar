@@ -71,6 +71,18 @@ pub struct DevContainerConfig {
     #[serde(rename = "init", default)]
     pub init: Option<bool>,
 
+    #[serde(rename = "portsAttributes", default)]
+    pub ports_attributes: Option<serde_json::Value>,
+
+    #[serde(rename = "otherPortsAttributes", default)]
+    pub other_ports_attributes: Option<serde_json::Value>,
+
+    #[serde(rename = "overrideFeatureInstallOrder", default)]
+    pub override_feature_install_order: Option<Vec<String>>,
+
+    #[serde(rename = "userEnvProbe", default)]
+    pub user_env_probe: Option<String>,
+
     #[serde(rename = "initializeCommand", default)]
     pub initialize_command: Option<serde_json::Value>,
 

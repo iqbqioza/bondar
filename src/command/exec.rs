@@ -14,7 +14,22 @@ pub fn run(
     docker::check_docker_available()?;
 
     let ws = docker::get_workspace_folder(workspace_folder)?;
-    let (cfg, _) = config::load_config(&ws, config_path.as_deref())?;
+    let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+
+    if cfg.docker_compose_file.is_some() {
+        let exec_user = user
+            .or_else(|| cfg.remote_user.clone())
+            .or_else(|| cfg.container_user.clone());
+        let exec_workdir = workdir.or(cfg.workspace_folder.clone());
+        return crate::compose::compose_exec(
+            &cfg,
+            &cfg_path,
+            &ws,
+            exec_user.as_deref(),
+            exec_workdir.as_deref(),
+            &command,
+        );
+    }
 
     let container_name = cfg.container_name(&ws);
     let exec_user = user

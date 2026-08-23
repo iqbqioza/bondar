@@ -8,7 +8,29 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     docker::check_docker_available()?;
 
     let ws = docker::get_workspace_folder(workspace_folder)?;
-    let (cfg, _) = config::load_config(&ws, config_path.as_deref())?;
+    let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+
+    if cfg.docker_compose_file.is_some() {
+        let _service = cfg.service.as_deref().unwrap_or("service");
+        let shell_cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi".to_string(),
+        ];
+        let user = cfg
+            .remote_user
+            .clone()
+            .or_else(|| cfg.container_user.clone());
+        let workdir = cfg.workspace_folder.clone();
+        return crate::compose::compose_exec(
+            &cfg,
+            &cfg_path,
+            &ws,
+            user.as_deref(),
+            workdir.as_deref(),
+            &shell_cmd,
+        );
+    }
 
     let container_name = cfg.container_name(&ws);
     let user = cfg
@@ -17,7 +39,6 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         .or_else(|| cfg.container_user.clone());
     let workdir = cfg.workspace_folder.clone();
 
-    // Try to determine shell
     let shell_cmd = vec![
         "sh".to_string(),
         "-c".to_string(),

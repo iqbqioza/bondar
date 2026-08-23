@@ -8,7 +8,17 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     docker::check_docker_available()?;
 
     let ws = docker::get_workspace_folder(workspace_folder)?;
-    let (cfg, _) = config::load_config(&ws, config_path.as_deref())?;
+    let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+
+    if cfg.docker_compose_file.is_some() {
+        return crate::compose::compose_down(&cfg, &cfg_path, &ws);
+    }
+
+    let shutdown = cfg.shutdown_action.as_deref().unwrap_or("stopContainer");
+    if shutdown == "none" {
+        println!("shutdownAction is 'none', skipping down (container kept)");
+        return Ok(());
+    }
 
     let container_name = cfg.container_name(&ws);
 

@@ -89,4 +89,34 @@ pub enum Commands {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+
+    /// Show container logs
+    Logs {
+        /// Path to workspace folder (defaults to current directory)
+        #[arg(long)]
+        workspace_folder: Option<PathBuf>,
+
+        /// Override path to devcontainer.json
+        #[arg(long)]
+        config: Option<PathBuf>,
+
+        /// Follow log output
+        #[arg(long)]
+        follow: bool,
+
+        /// Number of lines to show from the end
+        #[arg(long)]
+        tail: Option<String>,
+    },
+
+    /// Validate and print devcontainer configuration
+    ReadConfiguration {
+        /// Path to workspace folder (defaults to current directory)
+        #[arg(long)]
+        workspace_folder: Option<PathBuf>,
+
+        /// Override path to devcontainer.json
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
