@@ -451,6 +451,44 @@ mod tests {
     }
 
     #[test]
+    fn test_read_feature_metadata_singular_and_plural() {
+        let dir = std::env::temp_dir().join("bondar-feature-meta-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Singular form (spec) takes precedence
+        std::fs::write(
+            dir.join("devcontainer-feature.json"),
+            r#"{"name": "x", "installsAfter": ["ghcr.io/a/y"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("devcontainer-features.json"),
+            r#"{"name": "x", "installsAfter": ["ghcr.io/a/z"]}"#,
+        )
+        .unwrap();
+        let meta = read_feature_metadata(&dir).unwrap();
+        assert_eq!(meta["installsAfter"][0], "ghcr.io/a/y");
+
+        // Plural-only fallback
+        let dir2 = std::env::temp_dir().join("bondar-feature-meta-test2");
+        let _ = std::fs::remove_dir_all(&dir2);
+        std::fs::create_dir_all(&dir2).unwrap();
+        std::fs::write(dir2.join("devcontainer-features.json"), r#"{"name": "y"}"#).unwrap();
+        assert!(read_feature_metadata(&dir2).is_some());
+
+        // Missing -> None
+        let dir3 = std::env::temp_dir().join("bondar-feature-meta-test3");
+        let _ = std::fs::remove_dir_all(&dir3);
+        std::fs::create_dir_all(&dir3).unwrap();
+        assert!(read_feature_metadata(&dir3).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+        let _ = std::fs::remove_dir_all(&dir3);
+    }
+
+    #[test]
     fn test_sort_by_installs_after_orders_dependencies() {
         let mut feat_map: HashMap<String, serde_json::Value> = HashMap::new();
         feat_map.insert(

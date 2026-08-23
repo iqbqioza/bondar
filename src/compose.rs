@@ -378,6 +378,27 @@ pub fn get_service_container_id(
     Ok(id)
 }
 
+/// Whether the service container already exists, and if so, whether it is running.
+pub fn service_container_state(
+    config: &DevContainerConfig,
+    config_path: &Path,
+    workspace_folder: &Path,
+) -> Result<(bool, bool)> {
+    let id = match get_service_container_id(config, config_path, workspace_folder) {
+        Ok(id) => id,
+        Err(_) => return Ok((false, false)),
+    };
+    let output = Command::new("docker")
+        .args(["inspect", "--format", "{{.State.Running}}", &id])
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to inspect container: {e}")))?;
+    if !output.status.success() {
+        return Ok((true, false));
+    }
+    let running = String::from_utf8_lossy(&output.stdout).trim() == "true";
+    Ok((true, running))
+}
+
 pub fn get_service_container_name(
     config: &DevContainerConfig,
     config_path: &Path,

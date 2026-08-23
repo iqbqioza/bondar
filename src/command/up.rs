@@ -313,6 +313,8 @@ fn run_compose(
 ) -> Result<()> {
     crate::compose::check_compose_available()?;
 
+    let (was_existing, was_running) = crate::compose::service_container_state(cfg, cfg_path, ws)?;
+
     if let Some(cmd) = &cfg.initialize_command {
         println!("Running initializeCommand on host...");
         lifecycle::execute_host_lifecycle(cmd, ws)?;
@@ -339,18 +341,23 @@ fn run_compose(
 
     crate::compose::compose_up(cfg, cfg_path, ws, remove_existing)?;
 
+    let newly_created = !was_existing || remove_existing;
+
     let service = cfg.service.as_deref().unwrap_or("service");
     let container_name = crate::compose::get_service_container_name(cfg, cfg_path, ws)
         .unwrap_or_else(|_| service.to_string());
 
     host::handle_update_remote_user_uid(cfg, &container_name).ok();
-    crate::features::handle_features_with_container(
-        &cfg.features,
-        &cfg.override_feature_install_order,
-        Some(&container_name),
-        cfg.remote_user.as_deref(),
-    )
-    .ok();
+
+    if newly_created {
+        crate::features::handle_features_with_container(
+            &cfg.features,
+            &cfg.override_feature_install_order,
+            Some(&container_name),
+            cfg.remote_user.as_deref(),
+        )
+        .ok();
+    }
 
     let workspace_target = cfg
         .workspace_folder
@@ -358,36 +365,41 @@ fn run_compose(
         .unwrap_or_else(|| "/".to_string());
     let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
 
-    if let Some(cmd) = &cfg.on_create_command {
-        println!("Running onCreateCommand in compose service...");
-        lifecycle::execute_container_lifecycle(
-            cmd,
-            &container_name,
-            exec_user,
-            &workspace_target,
-            ws,
-        )?;
+    if newly_created {
+        if let Some(cmd) = &cfg.on_create_command {
+            println!("Running onCreateCommand in compose service...");
+            lifecycle::execute_container_lifecycle(
+                cmd,
+                &container_name,
+                exec_user,
+                &workspace_target,
+                ws,
+            )?;
+        }
+        if let Some(cmd) = &cfg.update_content_command {
+            lifecycle::execute_container_lifecycle(
+                cmd,
+                &container_name,
+                exec_user,
+                &workspace_target,
+                ws,
+            )?;
+        }
+        if let Some(cmd) = &cfg.post_create_command {
+            println!("Running postCreateCommand in compose service...");
+            lifecycle::execute_container_lifecycle(
+                cmd,
+                &container_name,
+                exec_user,
+                &workspace_target,
+                ws,
+            )?;
+        }
     }
-    if let Some(cmd) = &cfg.update_content_command {
-        lifecycle::execute_container_lifecycle(
-            cmd,
-            &container_name,
-            exec_user,
-            &workspace_target,
-            ws,
-        )?;
-    }
-    if let Some(cmd) = &cfg.post_create_command {
-        println!("Running postCreateCommand in compose service...");
-        lifecycle::execute_container_lifecycle(
-            cmd,
-            &container_name,
-            exec_user,
-            &workspace_target,
-            ws,
-        )?;
-    }
-    if let Some(cmd) = &cfg.post_start_command {
+
+    if (newly_created || !was_running)
+        && let Some(cmd) = &cfg.post_start_command
+    {
         println!("Running postStartCommand in compose service...");
         lifecycle::execute_container_lifecycle(
             cmd,
@@ -397,6 +409,7 @@ fn run_compose(
             ws,
         )?;
     }
+
     if let Some(cmd) = &cfg.post_attach_command {
         println!("Running postAttachCommand in compose service...");
         lifecycle::execute_container_lifecycle(
