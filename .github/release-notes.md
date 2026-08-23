@@ -1,4 +1,4 @@
-## bondar ${{ github.ref_name }}
+## bondar
 
 A standalone devcontainer alternative that does not depend on Node.js or VSCode Server.
 
@@ -10,10 +10,6 @@ Prebuilt binaries for Linux (x86_64/aarch64), macOS (x86_64/aarch64) and Windows
 
 ```sh
 # Linux / macOS
-chmod +x bondar-*
+chmod +x bondar-linux-x86_64
 sudo mv bondar-linux-x86_64 /usr/local/bin/bondar
 ```
-
-### Changelog
-
-See the commit history for changes in this release.

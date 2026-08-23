@@ -93,12 +93,31 @@ jobs:
           done
           cat SHA256SUMS
 
+      - name: Generate release notes
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
+          cp .github/release-notes.md release-notes.md
+          {
+            echo ""
+            echo "### Commits in this release"
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              git log --oneline --reverse "$PREV_TAG..HEAD" | sed 's/^/- /'
+            else
+              git log --oneline --reverse | sed 's/^/- /'
+            fi
+          } >> release-notes.md
+          echo "Generated release notes:"
+          cat release-notes.md
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: bondar ${{ github.ref_name }}
-          body_path: .github/release-notes.md
+          body_path: release-notes.md
           files: |
             artifacts/*/*
           fail_on_unmatched_files: true
