@@ -1,0 +1,11 @@
+{
+  "name": "bondar-sample",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  // Forward ports example
+  "forwardPorts": [3000],
+  "workspaceFolder": "/workspace",
+  "remoteUser": "vscode",
+  "customizations": {
+    // bondar ignores VSCode customizations (no VSCode dependency)
+  }
+}

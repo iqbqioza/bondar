@@ -1,0 +1,481 @@
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use crate::config::{DevContainerConfig, MountValue};
+use crate::error::{BondarError, Result};
+
+pub fn check_docker_available() -> Result<()> {
+    let output = Command::new("docker")
+        .arg("version")
+        .arg("--format")
+        .arg("{{.Server.Version}}")
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to execute docker: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BondarError::Docker(format!(
+            "Docker not available: {stderr}"
+        )));
+    }
+    Ok(())
+}
+
+pub fn build_image(
+    config: &DevContainerConfig,
+    config_path: &Path,
+    workspace_folder: &Path,
+    image_name: &str,
+) -> Result<()> {
+    let build = config
+        .build
+        .as_ref()
+        .ok_or_else(|| BondarError::Config("No 'build' section found, cannot build".to_string()))?;
+
+    let config_dir = config_path.parent().unwrap_or(workspace_folder);
+    let dockerfile = build
+        .dockerfile
+        .clone()
+        .unwrap_or_else(|| "Dockerfile".to_string());
+    let dockerfile_path = config_dir.join(&dockerfile);
+
+    if !dockerfile_path.exists() {
+        return Err(BondarError::NotFound(format!(
+            "Dockerfile not found: {}",
+            dockerfile_path.display()
+        )));
+    }
+
+    let context = build
+        .context
+        .as_ref()
+        .map(|c| config_dir.join(c))
+        .unwrap_or_else(|| config_dir.to_path_buf());
+
+    let context_str = context.to_string_lossy().to_string();
+    let dockerfile_str = dockerfile_path.to_string_lossy().to_string();
+
+    let mut cmd = Command::new("docker");
+    cmd.arg("build");
+    cmd.arg("-f").arg(&dockerfile_str);
+    cmd.arg("-t").arg(image_name);
+
+    for (k, v) in &build.args {
+        cmd.arg("--build-arg").arg(format!("{k}={v}"));
+    }
+
+    if let Some(target) = &build.target {
+        cmd.arg("--target").arg(target);
+    }
+
+    for opt in &build.options {
+        cmd.arg(opt);
+    }
+
+    if let Some(cache_from) = &build.cache_from {
+        match cache_from {
+            crate::config::CacheFromValue::Single(s) => {
+                cmd.arg("--cache-from").arg(s);
+            }
+            crate::config::CacheFromValue::Multiple(vec) => {
+                for s in vec {
+                    cmd.arg("--cache-from").arg(s);
+                }
+            }
+        }
+    }
+
+    cmd.arg(&context_str);
+    cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+
+    println!("Building image {image_name}...");
+    println!("  Dockerfile: {}", dockerfile_path.display());
+    println!("  Context: {}", context.display());
+
+    let status = cmd
+        .status()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker build: {e}")))?;
+
+    if !status.success() {
+        return Err(BondarError::Docker("docker build failed".to_string()));
+    }
+
+    Ok(())
+}
+
+pub fn resolve_image_name(
+    config: &DevContainerConfig,
+    config_path: &Path,
+    workspace_folder: &Path,
+) -> Result<String> {
+    if let Some(build) = &config.build {
+        let base = if let Some(name) = &config.name {
+            let sanitized: String = name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            format!("bondar-{sanitized}")
+        } else {
+            let basename = workspace_folder
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("workspace");
+            let sanitized: String = basename
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() {
+                        c.to_ascii_lowercase()
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            format!("bondar-{sanitized}")
+        };
+        let _ = (config_path, build);
+        Ok(base)
+    } else if let Some(image) = &config.image {
+        Ok(image.clone())
+    } else {
+        Err(BondarError::Config(
+            "No image or build specified".to_string(),
+        ))
+    }
+}
+
+pub fn container_exists(name: &str) -> Result<bool> {
+    let output = Command::new("docker")
+        .args(["ps", "-a", "--format", "{{.Names}}"])
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker ps: {e}")))?;
+
+    if !output.status.success() {
+        return Err(BondarError::Docker("docker ps failed".to_string()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().any(|line| line.trim() == name))
+}
+
+pub fn container_running(name: &str) -> Result<bool> {
+    let output = Command::new("docker")
+        .args(["ps", "--format", "{{.Names}}"])
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker ps: {e}")))?;
+
+    if !output.status.success() {
+        return Err(BondarError::Docker("docker ps failed".to_string()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().any(|line| line.trim() == name))
+}
+
+pub fn remove_container(name: &str) -> Result<()> {
+    let status = Command::new("docker")
+        .args(["rm", "-f", name])
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker rm: {e}")))?;
+
+    if !status.success() {
+        return Err(BondarError::Docker(format!(
+            "Failed to remove container {name}"
+        )));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_and_start_container(
+    config: &DevContainerConfig,
+    workspace_folder: &Path,
+    container_name: &str,
+    image_name: &str,
+    remove_existing: bool,
+) -> Result<()> {
+    if container_exists(container_name)? {
+        if remove_existing {
+            println!("Removing existing container {container_name}...");
+            remove_container(container_name)?;
+        } else if container_running(container_name)? {
+            println!("Container {container_name} is already running");
+            return Ok(());
+        } else {
+            println!("Starting existing container {container_name}...");
+            let status = Command::new("docker")
+                .args(["start", container_name])
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .map_err(|e| BondarError::Docker(format!("Failed to run docker start: {e}")))?;
+            if !status.success() {
+                return Err(BondarError::Docker(format!(
+                    "Failed to start container {container_name}"
+                )));
+            }
+            return Ok(());
+        }
+    }
+
+    let workspace_folder_str = workspace_folder.to_string_lossy().to_string();
+    let workspace_target = config.workspace_folder_or_default();
+
+    let mut cmd = Command::new("docker");
+    cmd.arg("run");
+    cmd.arg("-d");
+    cmd.arg("--name").arg(container_name);
+
+    let use_init = config.init.unwrap_or(false) || config.override_command.unwrap_or(true);
+    if use_init {
+        cmd.arg("--init");
+    }
+
+    if config.privileged.unwrap_or(false) {
+        cmd.arg("--privileged");
+    }
+
+    for cap in &config.cap_add {
+        cmd.arg("--cap-add").arg(cap);
+    }
+
+    for opt in &config.security_opt {
+        cmd.arg("--security-opt").arg(opt);
+    }
+
+    for run_arg in &config.run_args {
+        cmd.arg(run_arg);
+    }
+
+    // Workspace mount
+    if let Some(mount) = &config.workspace_mount {
+        let expanded = expand_vars(mount, workspace_folder);
+        cmd.arg("--mount").arg(&expanded);
+    } else {
+        let mount = format!(
+            "type=bind,source={workspace_folder_str},target={workspace_target},consistency=cached"
+        );
+        cmd.arg("--mount").arg(&mount);
+        // Also set working dir
+        cmd.arg("-w").arg(&workspace_target);
+    }
+
+    // Additional mounts
+    for m in &config.mounts {
+        match m {
+            MountValue::String(s) => {
+                let expanded = expand_vars(s, workspace_folder);
+                cmd.arg("--mount").arg(expanded);
+            }
+            MountValue::Object(obj) => {
+                let mut parts = Vec::new();
+                if let Some(t) = &obj.mount_type {
+                    parts.push(format!("type={t}"));
+                }
+                if let Some(s) = &obj.source {
+                    parts.push(format!("source={}", expand_vars(s, workspace_folder)));
+                }
+                if let Some(t) = &obj.target {
+                    parts.push(format!("target={}", expand_vars(t, workspace_folder)));
+                }
+                if !parts.is_empty() {
+                    cmd.arg("--mount").arg(parts.join(","));
+                }
+            }
+        }
+    }
+
+    // Env
+    for (k, v) in &config.container_env {
+        cmd.arg("-e").arg(format!("{k}={v}"));
+    }
+
+    // Publish / forward ports
+    for port in &config.forward_ports {
+        let port_str = match port {
+            crate::config::ForwardPort::Number(n) => n.to_string(),
+            crate::config::ForwardPort::Text(s) => s.clone(),
+        };
+        // forwardPorts in bondar: publish them
+        if let Some(colon) = port_str.find(':') {
+            let host = &port_str[..colon];
+            let container = &port_str[colon + 1..];
+            cmd.arg("-p").arg(format!("{host}:{container}"));
+        } else {
+            cmd.arg("-p").arg(format!("{port_str}:{port_str}"));
+        }
+    }
+
+    if let Some(app_port) = &config.app_port {
+        let ports: Vec<String> = match app_port {
+            crate::config::AppPortValue::Single(p) => vec![port_value_to_string(p)],
+            crate::config::AppPortValue::Multiple(v) => {
+                v.iter().map(port_value_to_string).collect()
+            }
+        };
+        for p in ports {
+            cmd.arg("-p").arg(format!("{p}:{p}"));
+        }
+    }
+
+    // User
+    if let Some(user) = &config.container_user {
+        cmd.arg("--user").arg(user);
+    }
+
+    // Image
+    cmd.arg(image_name);
+
+    // Override command
+    if config.override_command.unwrap_or(true) {
+        cmd.arg("sh");
+        cmd.arg("-c");
+        cmd.arg("while sleep 1000; do :; done");
+    }
+
+    cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+
+    println!("Creating container {container_name} from {image_name}...");
+    let status = cmd
+        .status()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker run: {e}")))?;
+
+    if !status.success() {
+        return Err(BondarError::Docker("docker run failed".to_string()));
+    }
+
+    Ok(())
+}
+
+fn port_value_to_string(p: &crate::config::PortValue) -> String {
+    match p {
+        crate::config::PortValue::Number(n) => n.to_string(),
+        crate::config::PortValue::Text(s) => s.clone(),
+    }
+}
+
+fn expand_vars(input: &str, workspace_folder: &Path) -> String {
+    let mut result = input.to_string();
+    let ws = workspace_folder.to_string_lossy().to_string();
+    let basename = workspace_folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    result = result.replace("${localWorkspaceFolder}", &ws);
+    result = result.replace("${localWorkspaceFolderBasename}", &basename);
+    result = result.replace("${containerWorkspaceFolder}", "/workspace");
+
+    // Expand ${localEnv:VAR} with env var
+    result = expand_local_env_vars(&result);
+    result
+}
+
+fn expand_local_env_vars(input: &str) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '$' && chars.peek() == Some(&'{') {
+            chars.next(); // consume '{'
+            let mut var_content = String::new();
+            let mut found_end = false;
+            for nc in chars.by_ref() {
+                if nc == '}' {
+                    found_end = true;
+                    break;
+                }
+                var_content.push(nc);
+            }
+            if found_end && var_content.starts_with("localEnv:") {
+                let rest = &var_content["localEnv:".len()..];
+                let (var_name, default_val) = if let Some(colon_pos) = rest.find(':') {
+                    (&rest[..colon_pos], Some(&rest[colon_pos + 1..]))
+                } else {
+                    (rest, None)
+                };
+                let env_val = std::env::var(var_name)
+                    .unwrap_or_else(|_| default_val.unwrap_or("").to_string());
+                result.push_str(&env_val);
+            } else if found_end {
+                result.push_str("${");
+                result.push_str(&var_content);
+                result.push('}');
+            } else {
+                result.push_str("${");
+                result.push_str(&var_content);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
+pub fn exec_in_container(
+    container_name: &str,
+    user: Option<&str>,
+    workdir: Option<&str>,
+    command: &[String],
+) -> Result<()> {
+    if !container_running(container_name)? {
+        return Err(BondarError::Docker(format!(
+            "Container {container_name} is not running"
+        )));
+    }
+
+    let mut cmd = Command::new("docker");
+    let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    if is_tty {
+        cmd.arg("exec").arg("-it");
+    } else {
+        cmd.arg("exec").arg("-i");
+    }
+
+    if let Some(u) = user {
+        cmd.arg("--user").arg(u);
+    }
+
+    if let Some(w) = workdir {
+        cmd.arg("-w").arg(w);
+    }
+
+    cmd.arg(container_name);
+    cmd.args(command);
+
+    let status = cmd
+        .status()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker exec: {e}")))?;
+
+    if !status.success() {
+        let code = status.code().unwrap_or(1);
+        std::process::exit(code);
+    }
+
+    Ok(())
+}
+
+pub fn get_workspace_folder(provided: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(p) = provided {
+        if p.exists() {
+            return Ok(p.canonicalize()?);
+        }
+        return Err(BondarError::NotFound(format!(
+            "Workspace folder not found: {}",
+            p.display()
+        )));
+    }
+
+    let cwd = std::env::current_dir()?;
+    Ok(cwd)
+}
