@@ -39,6 +39,9 @@ fn main() {
 
     if let Err(e) = result {
         eprintln!("Error: {e}");
+        lifecycle::reap_children();
         std::process::exit(1);
     }
+    // Reap any background children (e.g. waitFor-spawned docker exec)
+    lifecycle::reap_children();
 }

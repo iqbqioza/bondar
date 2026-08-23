@@ -1,8 +1,24 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 
 use crate::error::{BondarError, Result};
+
+/// Background child processes kept for reaping, so they do not become zombies
+/// while bondar is still alive.
+fn children() -> &'static Mutex<Vec<Child>> {
+    static CHILDREN: OnceLock<Mutex<Vec<Child>>> = OnceLock::new();
+    CHILDREN.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Reap finished background children (non-blocking). Called before bondar exits.
+pub fn reap_children() {
+    let Ok(mut guard) = children().lock() else {
+        return;
+    };
+    guard.retain_mut(|c| c.try_wait().ok().flatten().is_none());
+}
 
 /// Parameters for executing a command inside the dev container.
 #[derive(Clone, Copy)]
@@ -240,9 +256,13 @@ fn spawn_container_command(
     );
     let mut docker_cmd = build_container_command(cmd, args, use_shell, exec)?;
     docker_cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-    docker_cmd
+    let child = docker_cmd
         .spawn()
         .map_err(|e| BondarError::Docker(format!("Failed to spawn docker exec: {e}")))?;
+    // Track the child so it can be reaped instead of becoming a zombie
+    if let Ok(mut guard) = children().lock() {
+        guard.push(child);
+    }
     Ok(())
 }
 
@@ -352,6 +372,20 @@ mod tests {
     fn test_lifecycle_summary_empty() {
         let cfg = crate::config::DevContainerConfig::default();
         assert!(lifecycle_summary(&cfg).is_empty());
+    }
+
+    #[test]
+    fn test_reap_children() {
+        // Spawn a short-lived child and verify it is reaped
+        let child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+        if let Ok(mut guard) = children().lock() {
+            guard.push(child);
+        }
+        // Give the child a moment to exit
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        reap_children();
+        let remaining = children().lock().unwrap().len();
+        assert_eq!(remaining, 0);
     }
 
     #[test]
