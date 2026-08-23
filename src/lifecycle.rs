@@ -18,23 +18,6 @@ pub fn execute_host_lifecycle(value: &serde_json::Value, workspace_folder: &Path
     execute_value_with_env(value, workspace_folder, None, None)
 }
 
-pub fn execute_container_lifecycle(
-    value: &serde_json::Value,
-    container_name: &str,
-    user: Option<&str>,
-    workdir: &str,
-    workspace_folder: &Path,
-) -> Result<()> {
-    execute_container_lifecycle_with_env(
-        value,
-        container_name,
-        user,
-        workdir,
-        workspace_folder,
-        None,
-    )
-}
-
 pub fn execute_container_lifecycle_with_env(
     value: &serde_json::Value,
     container_name: &str,

@@ -277,6 +277,7 @@ pub fn compose_up(
     config_path: &Path,
     workspace_folder: &Path,
     remove_existing: bool,
+    no_build: bool,
 ) -> Result<()> {
     println!("Starting Docker Compose services...");
     let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
@@ -284,6 +285,9 @@ pub fn compose_up(
     cmd.arg("-d");
     if remove_existing {
         cmd.arg("--force-recreate");
+    }
+    if no_build {
+        cmd.arg("--no-build");
     }
     for s in &config.run_services {
         cmd.arg(s);
