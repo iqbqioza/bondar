@@ -570,7 +570,38 @@ pub fn publish_port_arg(spec: &str) -> Option<String> {
         Some(b) => (b, "/udp"),
         None => (spec, ""),
     };
+    if base.starts_with('[') {
+        return publish_ipv6_arg(base).map(|p| format!("{p}{protocol}"));
+    }
     publish_port_arg_inner(base).map(|p| format!("{p}{protocol}"))
+}
+
+/// Publish an IPv6 bind address in bracket form: `[::1]:8080` or `[::1]:8080:8080`.
+fn publish_ipv6_arg(spec: &str) -> Option<String> {
+    let end = spec.find(']')?;
+    let addr = &spec[1..end];
+    if addr.is_empty() || addr.contains('[') {
+        return None;
+    }
+    let rest = &spec[end + 1..];
+    let ports: Vec<&str> = rest.split(':').filter(|s| !s.is_empty()).collect();
+    match ports.len() {
+        1 => {
+            if is_port_or_range(ports[0]) {
+                Some(format!("[{addr}]:{}:{}", ports[0], ports[0]))
+            } else {
+                None
+            }
+        }
+        2 => {
+            if is_port_or_range(ports[0]) && is_port_or_range(ports[1]) {
+                Some(format!("[{addr}]:{}:{}", ports[0], ports[1]))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 fn publish_port_arg_inner(spec: &str) -> Option<String> {
@@ -1009,6 +1040,31 @@ mod tests {
         assert!(!is_port_or_range("-8080"));
         assert!(!is_port_or_range("abc"));
         assert!(!is_port_or_range("8080-8085-8090"));
+    }
+
+    #[test]
+    fn test_publish_ipv6_arg() {
+        assert_eq!(
+            publish_port_arg("[::1]:8080"),
+            Some("[::1]:8080:8080".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("[::1]:8080:8080"),
+            Some("[::1]:8080:8080".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("[2001:db8::1]:8080:80"),
+            Some("[2001:db8::1]:8080:80".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("[::]:8080"),
+            Some("[::]:8080:8080".to_string())
+        );
+        // Invalid forms
+        assert_eq!(publish_port_arg("[::1]"), None);
+        assert_eq!(publish_port_arg("[]:8080"), None);
+        assert_eq!(publish_port_arg("[::1]:abc"), None);
+        assert_eq!(publish_port_arg("[::1]:8080:abc"), None);
     }
 
     #[test]
