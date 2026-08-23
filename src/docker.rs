@@ -1061,6 +1061,19 @@ mod tests {
             expand_container_env_vars("${containerEnv:UNSET_VAR_XYZ_123}"),
             ""
         );
+        assert_eq!(
+            expand_container_env_vars("${containerEnv:UNSET_VAR_XYZ_123:}"),
+            ""
+        );
+    }
+
+    #[test]
+    fn test_expand_env_vars_empty_default() {
+        assert_eq!(expand_local_env_vars("${localEnv:UNSET_VAR_XYZ_123:}"), "");
+        assert_eq!(
+            expand_container_env_vars("${containerEnv:UNSET_VAR_XYZ_123:}"),
+            ""
+        );
     }
 
     #[test]

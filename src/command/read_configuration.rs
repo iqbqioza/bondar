@@ -187,6 +187,8 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     merged.insert("mounts".into(), json!(cfg.mounts));
     merged.insert("features".into(), json!(cfg.features));
     merged.insert("runServices".into(), json!(cfg.run_services));
+    merged.insert("shutdownAction".into(), json!(cfg.shutdown_action));
+    merged.insert("waitFor".into(), json!(cfg.wait_for));
     merged.insert("containerName".into(), json!(cfg.container_name(ws)));
     let default_ws = if cfg.docker_compose_file.is_some() {
         cfg.workspace_folder
