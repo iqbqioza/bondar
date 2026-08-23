@@ -88,7 +88,7 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         .unwrap_or_else(|| "/".to_string());
 
     let mut yaml = String::from("services:\n");
-    yaml.push_str(&format!("  {service}:\n"));
+    yaml.push_str(&format!("  {}:\n", escape_yaml_key(service)));
 
     let mut ports: Vec<String> = Vec::new();
     for port in &config.forward_ports {

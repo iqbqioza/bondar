@@ -173,128 +173,141 @@ pub fn handle_update_remote_user_uid(
         .args(["exec", container_name, "id", user])
         .output();
 
-    if let Ok(output) = check_user {
-        if !output.status.success() {
-            eprintln!(
-                "Warning: user '{user}' not found in container. 'bondar exec'/'bondar shell' will fail unless the image includes this user or updateRemoteUserUID is enabled (default)."
-            );
-            return Ok(());
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // stdout like uid=1000(vscode) gid=1000(vscode)
-        if let Some(current_uid) = parse_id_output(&stdout, "uid=")
-            && current_uid == host_uid
-        {
-            return Ok(());
-        }
-    }
+    let user_exists = match &check_user {
+        Ok(output) => output.status.success(),
+        Err(_) => false,
+    };
 
-    let usermod = std::process::Command::new("docker")
-        .args([
-            "exec",
-            "--user",
-            "root",
-            container_name,
-            "usermod",
-            "-u",
-            &host_uid.to_string(),
-            user,
-        ])
-        .output();
-
-    match usermod {
-        Ok(o) if o.status.success() => {
-            println!("Updated UID for {user}");
-        }
-        Ok(o) => {
-            eprintln!(
-                "Warning: usermod failed for {user}: {}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-        }
-        Err(e) => {
-            eprintln!("Warning: failed to run usermod: {e}");
-        }
-    }
-
-    // Resolve the user's primary group name before groupmod, since the group
-    // may not share the user's name (e.g. user "node" with group "node" vs "users").
-    let primary_group = std::process::Command::new("docker")
-        .args(["exec", container_name, "id", "-g", "-n", user])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty());
-    let group_target = primary_group.as_deref().unwrap_or(user);
-
-    let groupmod = std::process::Command::new("docker")
-        .args([
-            "exec",
-            "--user",
-            "root",
-            container_name,
-            "groupmod",
-            "-g",
-            &host_gid.to_string(),
-            group_target,
-        ])
-        .output();
-
-    match groupmod {
-        Ok(o) if o.status.success() => {
-            println!("Updated GID for {group_target}");
-        }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            if !stderr.contains("no such") {
-                eprintln!("Warning: groupmod failed for {group_target}: {stderr}");
+    if let Ok(output) = &check_user {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // stdout like uid=1000(vscode) gid=1000(vscode)
+            if let Some(current_uid) = parse_id_output(&stdout, "uid=")
+                && current_uid == host_uid
+            {
+                return Ok(());
             }
-        }
-        Err(e) => {
-            eprintln!("Warning: failed to run groupmod: {e}");
+        } else {
+            eprintln!("Warning: user '{user}' not found in container; will attempt to create it");
         }
     }
 
-    // Chown workspace if it exists inside container
-    let chown_target = config.workspace_folder_or_default();
-    if chown_target == "/" {
-        eprintln!(
-            "Warning: skipping chown of '/' (would alter container-wide ownership); set workspaceFolder to a specific directory"
-        );
-    } else {
-        let chown = std::process::Command::new("docker")
+    if user_exists {
+        let usermod = std::process::Command::new("docker")
             .args([
                 "exec",
                 "--user",
                 "root",
                 container_name,
-                "chown",
-                "-R",
-                &format!("{user}:{user}"),
-                &chown_target,
+                "usermod",
+                "-u",
+                &host_uid.to_string(),
+                user,
             ])
             .output();
-        if let Ok(o) = chown {
-            if o.status.success() {
-                println!("Chowned {chown_target} to {user}");
-            } else {
+
+        match usermod {
+            Ok(o) if o.status.success() => {
+                println!("Updated UID for {user}");
+            }
+            Ok(o) => {
+                eprintln!(
+                    "Warning: usermod failed for {user}: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to run usermod: {e}");
+            }
+        }
+
+        // Resolve the user's primary group name before groupmod, since the group
+        // may not share the user's name (e.g. user "node" with group "node" vs "users").
+        let primary_group = std::process::Command::new("docker")
+            .args(["exec", container_name, "id", "-g", "-n", user])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+        let group_target = primary_group.as_deref().unwrap_or(user);
+
+        let groupmod = std::process::Command::new("docker")
+            .args([
+                "exec",
+                "--user",
+                "root",
+                container_name,
+                "groupmod",
+                "-g",
+                &host_gid.to_string(),
+                group_target,
+            ])
+            .output();
+
+        match groupmod {
+            Ok(o) if o.status.success() => {
+                println!("Updated GID for {group_target}");
+            }
+            Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr);
-                if !stderr.contains("No such") {
-                    eprintln!("Warning: chown failed: {stderr}");
+                if !stderr.contains("no such") {
+                    eprintln!("Warning: groupmod failed for {group_target}: {stderr}");
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to run groupmod: {e}");
+            }
+        }
+
+        // Chown workspace if it exists inside container
+        let chown_target = config.workspace_folder_or_default();
+        if chown_target == "/" {
+            eprintln!(
+                "Warning: skipping chown of '/' (would alter container-wide ownership); set workspaceFolder to a specific directory"
+            );
+        } else {
+            let chown = std::process::Command::new("docker")
+                .args([
+                    "exec",
+                    "--user",
+                    "root",
+                    container_name,
+                    "chown",
+                    "-R",
+                    &format!("{user}:{user}"),
+                    &chown_target,
+                ])
+                .output();
+            if let Ok(o) = chown {
+                if o.status.success() {
+                    println!("Chowned {chown_target} to {user}");
+                } else {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    if !stderr.contains("No such") {
+                        eprintln!("Warning: chown failed: {stderr}");
+                    }
                 }
             }
         }
     }
 
-    // Fallback: if usermod failed due to missing user, try useradd
-    let check_after = std::process::Command::new("docker")
-        .args(["exec", container_name, "id", user])
-        .output();
-    if let Ok(o) = check_after
-        && !o.status.success()
-    {
+    // Fallback: create the user (and its group) when it does not exist in the container
+    if !user_exists {
         eprintln!("Attempting to create user {user} with UID {host_uid}");
+        // Create the group first (fails harmlessly if it already exists)
+        let _ = std::process::Command::new("docker")
+            .args([
+                "exec",
+                "--user",
+                "root",
+                container_name,
+                "groupadd",
+                "-g",
+                &host_gid.to_string(),
+                user,
+            ])
+            .status();
         let useradd = std::process::Command::new("docker")
             .args([
                 "exec",
@@ -306,7 +319,7 @@ pub fn handle_update_remote_user_uid(
                 "-u",
                 &host_uid.to_string(),
                 "-g",
-                &host_gid.to_string(),
+                user,
                 user,
             ])
             .output();

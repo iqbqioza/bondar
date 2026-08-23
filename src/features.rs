@@ -397,6 +397,10 @@ fn install_feature(
     println!("Attempting to install feature '{id}' with opts {opts}...");
 
     let dest_dir = std::path::PathBuf::from("/tmp/bondar_features").join(sanitize_id(id));
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        eprintln!("  Warning: could not create feature directory: {e}");
+        return Ok(());
+    }
     if let Err(e) = fetch_feature(id, &dest_dir) {
         eprintln!("  Warning: could not fetch feature {id}: {e}");
         return Ok(());

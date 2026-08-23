@@ -527,11 +527,16 @@ pub fn publish_port_arg(spec: &str) -> Option<String> {
     if rest.len() == 1 {
         let host_is_ip = first.contains('.') && first.split('.').all(|x| x.parse::<u16>().is_ok());
         let host_is_number = first.parse::<u16>().is_ok();
+        let container_ok = rest[0].parse::<u16>().is_ok();
+        if !container_ok {
+            // empty or non-numeric container port ("8080:" / "8080:abc")
+            return None;
+        }
         if host_is_ip {
             // "127.0.0.1:9090" -> "127.0.0.1:9090:9090"
             return Some(format!("{spec}:{}", rest[0]));
         }
-        if host_is_number || host_is_ip {
+        if host_is_number {
             // "8080:80" -> "8080:80"
             return Some(spec.to_string());
         }
@@ -848,6 +853,13 @@ mod tests {
     fn test_publish_port_arg_service_name() {
         assert_eq!(publish_port_arg("db:5432"), None);
         assert_eq!(publish_port_arg("not-a-port"), None);
+    }
+
+    #[test]
+    fn test_publish_port_arg_empty_or_invalid_container_port() {
+        assert_eq!(publish_port_arg("8080:"), None);
+        assert_eq!(publish_port_arg("8080:abc"), None);
+        assert_eq!(publish_port_arg(":8080"), None);
     }
 
     #[test]
