@@ -13,7 +13,7 @@ pub fn collect_feature_customizations(
     };
     let mut merged = serde_json::Map::new();
     for id in feat_map.keys() {
-        let dir = Path::new("/tmp/bondar_features").join(sanitize_id(id));
+        let dir = feature_cache_dir().join(sanitize_id(id));
         let Some(meta) = read_feature_metadata(&dir) else {
             continue;
         };
@@ -164,6 +164,10 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
         visit(id, feat_map, &mut sorted, &mut visiting, &mut visited);
     }
     sorted
+}
+
+fn feature_cache_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("bondar_features")
 }
 
 fn sanitize_id(id: &str) -> String {
@@ -449,7 +453,7 @@ fn install_feature(
 
     println!("Attempting to install feature '{id}' with opts {opts}...");
 
-    let dest_dir = std::path::PathBuf::from("/tmp/bondar_features").join(sanitize_id(id));
+    let dest_dir = feature_cache_dir().join(sanitize_id(id));
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         eprintln!("  Warning: could not create feature directory: {e}");
         return Ok(());

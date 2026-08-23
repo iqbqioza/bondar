@@ -5,6 +5,7 @@ A standalone development container command, as an alternative to `devcontainer`.
 - No dependency on Node.js, VSCode Server, or other Microsoft-related tools (single Rust binary)
 - Uses existing `.devcontainer/devcontainer.json` definitions as-is
 - Requires only the Docker CLI
+- Works on Linux, macOS and Windows (host requirements use platform-appropriate probes; UID/GID sync is skipped on Windows)
 
 ## Install
 

@@ -111,14 +111,20 @@ fn execute_on_host(
     );
 
     let mut command = if use_shell {
-        let mut c = Command::new("sh");
         let full = if expanded_args.is_empty() {
             expanded_cmd.clone()
         } else {
             format!("{expanded_cmd} {}", expanded_args.join(" "))
         };
-        c.arg("-c").arg(&full);
-        c
+        if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(&full);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(&full);
+            c
+        }
     } else {
         let mut c = Command::new(&expanded_cmd);
         c.args(&expanded_args);

@@ -87,6 +87,7 @@ fn available_cpus() -> u64 {
         .unwrap_or(1)
 }
 
+#[cfg(target_os = "linux")]
 fn available_memory_bytes() -> Option<u64> {
     let content = std::fs::read_to_string("/proc/meminfo").ok()?;
     for line in content.lines() {
@@ -102,6 +103,24 @@ fn available_memory_bytes() -> Option<u64> {
     None
 }
 
+#[cfg(target_os = "macos")]
+fn available_memory_bytes() -> Option<u64> {
+    let output = std::process::Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn available_memory_bytes() -> Option<u64> {
+    None
+}
+
+#[cfg(unix)]
 fn available_storage_bytes(path: &Path) -> Option<u64> {
     let output = std::process::Command::new("df")
         .arg("-k")
@@ -123,13 +142,18 @@ fn available_storage_bytes(path: &Path) -> Option<u64> {
     None
 }
 
+#[cfg(not(unix))]
+fn available_storage_bytes(_path: &Path) -> Option<u64> {
+    None
+}
+
 fn has_gpu() -> bool {
     std::process::Command::new("nvidia-smi")
         .arg("-L")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-        || Path::new("/dev/nvidia0").exists()
+        || (cfg!(unix) && Path::new("/dev/nvidia0").exists())
 }
 
 fn parse_size(s: &str) -> Option<u64> {
@@ -189,12 +213,18 @@ pub fn handle_update_remote_user_uid(
     let host_uid = get_host_uid();
     let host_gid = get_host_gid();
 
-    // Running bondar as root on the host makes UID mapping pointless
-    // (root can access any file) and would map the container user to uid 0.
+    // On Windows there is no POSIX UID/GID concept; on Unix running as root
+    // makes UID mapping pointless (root can access any file).
     if host_uid == 0 {
-        eprintln!(
-            "Warning: bondar is running as root; skipping updateRemoteUserUID (container user would map to uid 0)"
-        );
+        if cfg!(windows) {
+            eprintln!(
+                "Warning: UID/GID synchronization is not supported on Windows; skipping updateRemoteUserUID"
+            );
+        } else {
+            eprintln!(
+                "Warning: bondar is running as root; skipping updateRemoteUserUID (container user would map to uid 0)"
+            );
+        }
         return Ok(());
     }
 
@@ -395,6 +425,7 @@ fn parse_env_output(stdout: &[u8]) -> Option<std::collections::HashMap<String, S
     if env.is_empty() { None } else { Some(env) }
 }
 
+#[cfg(unix)]
 fn get_host_uid() -> u32 {
     std::process::Command::new("id")
         .arg("-u")
@@ -402,6 +433,11 @@ fn get_host_uid() -> u32 {
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
         .unwrap_or(1000)
+}
+
+#[cfg(not(unix))]
+fn get_host_uid() -> u32 {
+    0
 }
 
 /// Chown the workspace directory to the given user, guarding against "/".
@@ -446,6 +482,7 @@ fn chown_workspace(config: &crate::config::DevContainerConfig, container_name: &
     }
 }
 
+#[cfg(unix)]
 fn get_host_gid() -> u32 {
     std::process::Command::new("id")
         .arg("-g")
@@ -453,6 +490,11 @@ fn get_host_gid() -> u32 {
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
         .unwrap_or(1000)
+}
+
+#[cfg(not(unix))]
+fn get_host_gid() -> u32 {
+    0
 }
 
 fn parse_id_output(output: &str, prefix: &str) -> Option<u32> {
