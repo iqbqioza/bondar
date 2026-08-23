@@ -3,6 +3,42 @@ use std::path::Path;
 
 use crate::error::{BondarError, Result};
 
+/// Collect `customizations` from all fetched feature metadata files and merge
+/// them into a single object. Returns an empty map when nothing is available.
+pub fn collect_feature_customizations(
+    features: &Option<HashMap<String, serde_json::Value>>,
+) -> serde_json::Value {
+    let Some(feat_map) = features else {
+        return serde_json::Value::Object(Default::default());
+    };
+    let mut merged = serde_json::Map::new();
+    for id in feat_map.keys() {
+        let dir = Path::new("/tmp/bondar_features").join(sanitize_id(id));
+        let Some(meta) = read_feature_metadata(&dir) else {
+            continue;
+        };
+        let Some(custom) = meta.get("customizations") else {
+            continue;
+        };
+        let Some(obj) = custom.as_object() else {
+            continue;
+        };
+        for (tool, value) in obj {
+            let entry = merged
+                .entry(tool.clone())
+                .or_insert_with(|| serde_json::Value::Object(Default::default()));
+            if let Some(existing) = entry.as_object_mut()
+                && let Some(incoming) = value.as_object()
+            {
+                for (k, v) in incoming {
+                    existing.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+    serde_json::Value::Object(merged)
+}
+
 pub fn handle_features_with_container(
     features: &Option<HashMap<String, serde_json::Value>>,
     override_order: &Option<Vec<String>>,

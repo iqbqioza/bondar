@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::config;
 use crate::docker;
 use crate::error::Result;
+use crate::host;
 
 pub fn run(
     workspace_folder: Option<PathBuf>,
@@ -37,19 +38,36 @@ pub fn run(
         .or_else(|| cfg.container_user.clone());
     let exec_workdir = workdir.or(cfg.workspace_folder.clone());
 
-    let remote_env = if cfg.remote_env.is_empty() {
-        None
-    } else {
-        Some(&cfg.remote_env)
-    };
+    let env = merged_exec_env(&cfg, &container_name, exec_user.as_deref());
     docker::exec_in_container(
         &container_name,
         exec_user.as_deref(),
         exec_workdir.as_deref(),
         &command,
-        remote_env,
+        env.as_ref(),
         Some(&ws),
     )?;
 
     Ok(())
+}
+
+pub fn merged_exec_env(
+    cfg: &config::DevContainerConfig,
+    container_name: &str,
+    exec_user: Option<&str>,
+) -> Option<std::collections::HashMap<String, String>> {
+    let mut merged = cfg.remote_env.clone();
+    if let Some(probe) = &cfg.user_env_probe
+        && probe != "none"
+        && let Some(probed) = host::probe_user_env(container_name, exec_user, probe)
+    {
+        for (k, v) in probed {
+            merged.entry(k).or_insert(v);
+        }
+    }
+    if merged.is_empty() {
+        None
+    } else {
+        Some(merged)
+    }
 }

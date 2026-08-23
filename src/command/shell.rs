@@ -11,7 +11,6 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
     if cfg.docker_compose_file.is_some() {
-        let _service = cfg.service.as_deref().unwrap_or("service");
         let shell_cmd = vec![
             "sh".to_string(),
             "-c".to_string(),
@@ -45,17 +44,13 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi".to_string(),
     ];
 
-    let remote_env = if cfg.remote_env.is_empty() {
-        None
-    } else {
-        Some(&cfg.remote_env)
-    };
+    let env = crate::command::exec::merged_exec_env(&cfg, &container_name, user.as_deref());
     docker::exec_in_container(
         &container_name,
         user.as_deref(),
         workdir.as_deref(),
         &shell_cmd,
-        remote_env,
+        env.as_ref(),
         Some(&ws),
     )?;
 

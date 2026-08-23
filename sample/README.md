@@ -78,9 +78,9 @@ String => `sh -c`, Array => direct exec, Object => sequential per key.
 Supported expansions: `${localWorkspaceFolder}`, `${localWorkspaceFolderBasename}`, `${containerWorkspaceFolder}`, `${containerWorkspaceFolderBasename}`, `${localEnv:VAR:default}`, `${containerEnv:VAR:default}`, `${devcontainerId}`.
 Labels `devcontainer.local_folder`, `devcontainer.config_file`, `devcontainer.id` are auto-added to `docker run`.
 
-## Not yet fully supported
+## Feature support
 
-- `features` / `overrideFeatureInstallOrder` -> requires `oras` or a registry for full installation
-- `dockerComposeFile` -> error (use `image`/`build`)
-- `hostRequirements` / `updateRemoteUserUID` / `shutdownAction` -> warning
-- `portsAttributes` -> ignored (only `forwardPorts` publish)
+- `features` / `overrideFeatureInstallOrder` -> supported (requires `oras` or `docker pull` to fetch, then executes `install.sh` inside the container)
+- `dockerComposeFile` / `service` / `runServices` -> supported (`docker compose` with dynamic override.yml injection of env/mounts/ports)
+- `hostRequirements` / `updateRemoteUserUID` / `shutdownAction` -> supported
+- `portsAttributes` / `otherPortsAttributes` -> stored as container labels (no UI)

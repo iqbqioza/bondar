@@ -672,19 +672,29 @@ pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
     };
     let mut resolved = Vec::new();
     for (key, spec) in secrets {
-        let var_name = match spec {
-            serde_json::Value::String(s) => s.clone(),
-            serde_json::Value::Object(map) => map
-                .get("localEnv")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .unwrap_or_else(|| key.clone()),
-            _ => continue,
-        };
-        if let Ok(value) = std::env::var(&var_name) {
-            resolved.push((key.clone(), value));
-        } else {
-            eprintln!("Warning: secret '{key}' references unset localEnv variable '{var_name}'");
+        match spec {
+            serde_json::Value::Object(map) => {
+                let var_name = map
+                    .get("localEnv")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+                    .unwrap_or_else(|| key.clone());
+                if let Ok(value) = std::env::var(&var_name) {
+                    resolved.push((key.clone(), value));
+                } else {
+                    eprintln!(
+                        "Warning: secret '{key}' references unset localEnv variable '{var_name}'"
+                    );
+                }
+            }
+            serde_json::Value::String(path) => {
+                eprintln!(
+                    "Warning: secret '{key}' uses the file path form '{path}' which is not supported; use {{\"localEnv\": \"VAR\"}} instead"
+                );
+            }
+            other => {
+                eprintln!("Warning: secret '{key}' has unsupported format: {other}");
+            }
         }
     }
     resolved

@@ -175,7 +175,9 @@ pub fn handle_update_remote_user_uid(
 
     if let Ok(output) = check_user {
         if !output.status.success() {
-            eprintln!("Warning: user {user} not found in container, skipping UID update");
+            eprintln!(
+                "Warning: user '{user}' not found in container. 'bondar exec'/'bondar shell' will fail unless the image includes this user or updateRemoteUserUID is enabled (default)."
+            );
             return Ok(());
         }
         let stdout = String::from_utf8_lossy(&output.stdout);

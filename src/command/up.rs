@@ -103,6 +103,20 @@ pub fn run(
         cfg.remote_user.as_deref(),
     )?;
 
+    // Store merged feature customizations as a container label
+    let merged_custom = crate::features::collect_feature_customizations(&cfg.features);
+    if !merged_custom.as_object().is_none_or(|m| m.is_empty()) {
+        let json_str = serde_json::to_string(&merged_custom).unwrap_or_default();
+        let _ = std::process::Command::new("docker")
+            .args([
+                "label",
+                &container_name,
+                &format!("devcontainer.feature_customizations={json_str}"),
+            ])
+            .status();
+        println!("Merged feature customizations stored on container label");
+    }
+
     let probed_env = if let Some(probe) = &cfg.user_env_probe
         && probe != "none"
     {
@@ -213,7 +227,6 @@ pub fn run(
             "updateContentCommand",
             "postCreateCommand",
             "postStartCommand",
-            "postAttachCommand",
         ];
         if !valid.contains(&wait.as_str()) {
             eprintln!("Warning: waitFor '{wait}' is not a valid lifecycle command");
@@ -233,12 +246,11 @@ pub fn run(
 }
 
 fn wait_index(wait: &Option<String>) -> usize {
-    const ORDER: [&str; 5] = [
+    const ORDER: [&str; 4] = [
         "onCreateCommand",
         "updateContentCommand",
         "postCreateCommand",
         "postStartCommand",
-        "postAttachCommand",
     ];
     wait.as_ref()
         .and_then(|w| ORDER.iter().position(|&x| x == w))

@@ -87,7 +87,6 @@ pub fn run(
             "updateContentCommand",
             "postCreateCommand",
             "postStartCommand",
-            "postAttachCommand",
         ];
         if !valid.contains(&wait.as_str()) {
             errors.push(format!("  waitFor '{wait}' is invalid"));
