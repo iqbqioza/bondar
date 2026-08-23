@@ -207,15 +207,17 @@ pub fn container_exists_and_running(name: &str) -> Result<(bool, bool)> {
 }
 
 pub fn find_containers_for_workspace(workspace_folder: &Path) -> Result<Vec<String>> {
+    let label_value = workspace_folder.display().to_string();
+    // Docker filters split on ',' and '='; bail out silently for exotic paths
+    if label_value.contains(',') || label_value.contains('=') {
+        return Ok(Vec::new());
+    }
     let output = Command::new("docker")
         .args([
             "ps",
             "-a",
             "--filter",
-            &format!(
-                "label=devcontainer.local_folder={}",
-                workspace_folder.display()
-            ),
+            &format!("label=devcontainer.local_folder={label_value}"),
             "--format",
             "{{.Names}}",
         ])

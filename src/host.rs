@@ -261,35 +261,7 @@ pub fn handle_update_remote_user_uid(
         }
 
         // Chown workspace if it exists inside container
-        let chown_target = config.workspace_folder_or_default();
-        if chown_target == "/" {
-            eprintln!(
-                "Warning: skipping chown of '/' (would alter container-wide ownership); set workspaceFolder to a specific directory"
-            );
-        } else {
-            let chown = std::process::Command::new("docker")
-                .args([
-                    "exec",
-                    "--user",
-                    "root",
-                    container_name,
-                    "chown",
-                    "-R",
-                    &format!("{user}:{user}"),
-                    &chown_target,
-                ])
-                .output();
-            if let Ok(o) = chown {
-                if o.status.success() {
-                    println!("Chowned {chown_target} to {user}");
-                } else {
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    if !stderr.contains("No such") {
-                        eprintln!("Warning: chown failed: {stderr}");
-                    }
-                }
-            }
-        }
+        chown_workspace(config, container_name, user);
     }
 
     // Fallback: create the user (and its group) when it does not exist in the container
@@ -326,6 +298,8 @@ pub fn handle_update_remote_user_uid(
         if let Ok(ua) = useradd {
             if ua.status.success() {
                 println!("Created user {user}");
+                // After creating the user, take ownership of the workspace
+                chown_workspace(config, container_name, user);
             } else {
                 eprintln!(
                     "Warning: useradd failed: {}",
@@ -382,6 +356,39 @@ fn get_host_uid() -> u32 {
         .ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
         .unwrap_or(1000)
+}
+
+/// Chown the workspace directory to the given user, guarding against "/".
+fn chown_workspace(config: &crate::config::DevContainerConfig, container_name: &str, user: &str) {
+    let chown_target = config.workspace_folder_or_default();
+    if chown_target == "/" {
+        eprintln!(
+            "Warning: skipping chown of '/' (would alter container-wide ownership); set workspaceFolder to a specific directory"
+        );
+        return;
+    }
+    let chown = std::process::Command::new("docker")
+        .args([
+            "exec",
+            "--user",
+            "root",
+            container_name,
+            "chown",
+            "-R",
+            &format!("{user}:{user}"),
+            &chown_target,
+        ])
+        .output();
+    if let Ok(o) = chown {
+        if o.status.success() {
+            println!("Chowned {chown_target} to {user}");
+        } else {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            if !stderr.contains("No such") {
+                eprintln!("Warning: chown failed: {stderr}");
+            }
+        }
+    }
 }
 
 fn get_host_gid() -> u32 {

@@ -44,6 +44,7 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
     let mut source = None;
     let mut target = None;
     let mut readonly = false;
+    let mut is_tmpfs = false;
     for part in mount.split(',') {
         let part = part.trim();
         if part.is_empty() {
@@ -51,6 +52,7 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
         }
         if let Some((key, value)) = part.split_once('=') {
             match key {
+                "type" => is_tmpfs = value == "tmpfs",
                 "source" | "src" => source = Some(value),
                 "target" | "dst" | "destination" => target = Some(value),
                 "readonly" | "ro" => readonly = value == "true" || value == "1",
@@ -62,6 +64,10 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
                 _ => {}
             }
         }
+    }
+    // tmpfs mounts have no short-syntax equivalent in compose
+    if is_tmpfs {
+        return None;
     }
     let source = source.unwrap_or_default();
     let target = target?;

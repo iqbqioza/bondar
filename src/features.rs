@@ -403,6 +403,8 @@ fn install_feature(
     }
     if let Err(e) = fetch_feature(id, &dest_dir) {
         eprintln!("  Warning: could not fetch feature {id}: {e}");
+        // Avoid stale metadata from a previous failed/partial fetch
+        let _ = std::fs::remove_dir_all(&dest_dir);
         return Ok(());
     }
 
