@@ -500,6 +500,21 @@ mod tests {
     }
 
     #[test]
+    fn test_container_name() {
+        let named = DevContainerConfig {
+            name: Some("My Dev".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(named.container_name(Path::new("/tmp/x")), "bondar-My-Dev");
+
+        let default = DevContainerConfig::default();
+        assert_eq!(
+            default.container_name(Path::new("/tmp/my-workspace")),
+            "bondar-my-workspace"
+        );
+    }
+
+    #[test]
     fn test_validate_empty_strings() {
         let empty_image: DevContainerConfig = serde_json::from_str(r#"{"image": ""}"#).unwrap();
         assert!(empty_image.validate().is_err());

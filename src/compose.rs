@@ -512,6 +512,7 @@ pub fn check_compose_available() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_mount_string_to_compose_volume_basic() {
@@ -579,5 +580,42 @@ mod tests {
     fn test_escape_yaml_key() {
         assert_eq!(escape_yaml_key("MY_VAR-1"), "MY_VAR-1");
         assert_eq!(escape_yaml_key("weird key"), "\"weird key\"");
+    }
+
+    #[test]
+    fn test_write_compose_override_env() {
+        let dir = std::env::temp_dir().join("bondar-ovr-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            container_env: env,
+            forward_ports: vec![crate::config::ForwardPort::Number(8080)],
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        assert!(!path.as_os_str().is_empty());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("  app:"));
+        assert!(content.contains("FOO: \"bar\""));
+        assert!(content.contains("- \"8080:8080\""));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_compose_override_empty() {
+        let dir = std::env::temp_dir().join("bondar-ovr-test2");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        assert!(path.as_os_str().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
