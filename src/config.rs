@@ -223,6 +223,13 @@ impl DevContainerConfig {
                 "'workspaceFolder' must be specified when using 'workspaceMount'".to_string(),
             ));
         }
+        if let Some(f) = &self.workspace_folder
+            && f.trim().is_empty()
+        {
+            return Err(BondarError::Config(
+                "'workspaceFolder' must not be empty".to_string(),
+            ));
+        }
         if let Some(f) = &self.docker_compose_file {
             let empty = match f {
                 ComposeFileValue::Single(s) => s.trim().is_empty(),

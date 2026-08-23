@@ -81,7 +81,14 @@ pub fn handle_features_with_container(
             );
         }
         println!("Installing features in override order:");
+        let mut seen = std::collections::HashSet::new();
         for id in order {
+            if !seen.insert(id.clone()) {
+                eprintln!(
+                    "Warning: duplicate feature '{id}' in overrideFeatureInstallOrder, skipping duplicate"
+                );
+                continue;
+            }
             if let Some(opts) = feat_map.get(id) {
                 install_feature(id, opts, container_name, container_user)?;
             }

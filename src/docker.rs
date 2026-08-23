@@ -719,6 +719,11 @@ fn expand_local_env_vars(input: &str) -> String {
                 } else {
                     (rest, None)
                 };
+                if var_name.is_empty() {
+                    eprintln!(
+                        "Warning: '${{localEnv:}}' has an empty variable name, resolved to empty"
+                    );
+                }
                 let env_val = std::env::var(var_name)
                     .unwrap_or_else(|_| default_val.unwrap_or("").to_string());
                 result.push_str(&env_val);
@@ -900,6 +905,28 @@ mod tests {
         assert!(!is_ipv4("1.2.3"));
         assert!(!is_ipv4("8080"));
         assert!(!is_ipv4("a.b.c.d"));
+    }
+
+    #[test]
+    fn test_expand_vars_for_host_with_target() {
+        let ws = std::path::Path::new("/home/user/proj");
+        let expanded = expand_vars_for_host_with_target(
+            "${localWorkspaceFolder}|${localWorkspaceFolderBasename}|${containerWorkspaceFolder}|${containerWorkspaceFolderBasename}",
+            ws,
+            "/myws",
+        );
+        assert_eq!(expanded, "/home/user/proj|proj|/myws|myws");
+    }
+
+    #[test]
+    fn test_devcontainer_id_for_stable() {
+        let ws = std::path::Path::new("/home/user/proj");
+        let a = devcontainer_id_for(ws);
+        let b = devcontainer_id_for(ws);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 16);
+        let other = devcontainer_id_for(std::path::Path::new("/home/user/other"));
+        assert_ne!(a, other);
     }
 
     #[test]
