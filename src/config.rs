@@ -208,10 +208,16 @@ impl DevContainerConfig {
                 "'image' and 'build' cannot both be specified".to_string(),
             ));
         }
-        if let Some(n) = &self.name
-            && n.trim().is_empty()
-        {
-            return Err(BondarError::Config("'name' must not be empty".to_string()));
+        if let Some(n) = &self.name {
+            let trimmed = n.trim();
+            if trimmed.is_empty() {
+                return Err(BondarError::Config("'name' must not be empty".to_string()));
+            }
+            if !trimmed.chars().any(|c| c.is_alphanumeric()) {
+                return Err(BondarError::Config(
+                    "'name' must contain at least one alphanumeric character".to_string(),
+                ));
+            }
         }
         if let Some(img) = &self.image
             && img.trim().is_empty()
@@ -602,5 +608,16 @@ mod tests {
         let cfg: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "name": ""}"#).unwrap();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_symbolic_name() {
+        let cfg: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "name": "!!!"}"#).unwrap();
+        assert!(cfg.validate().is_err());
+
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "name": "my-dev"}"#).unwrap();
+        assert!(ok.validate().is_ok());
     }
 }
