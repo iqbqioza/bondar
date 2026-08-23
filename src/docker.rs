@@ -341,6 +341,11 @@ pub fn create_and_start_container(
         cmd.arg("-e").arg(format!("{k}={expanded_v}"));
     }
 
+    // Secrets resolved from local env (devcontainer spec: { "MY_SECRET": { "localEnv": "VAR" } })
+    for (k, v) in resolve_secrets(config) {
+        cmd.arg("-e").arg(format!("{k}={v}"));
+    }
+
     // Publish / forward ports
     for port in &config.forward_ports {
         let port_str = match port {
@@ -555,6 +560,30 @@ fn expand_local_env_vars(input: &str) -> String {
     }
 
     result
+}
+
+pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
+    let Some(secrets) = &config.secrets else {
+        return Vec::new();
+    };
+    let mut resolved = Vec::new();
+    for (key, spec) in secrets {
+        let var_name = match spec {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Object(map) => map
+                .get("localEnv")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| key.clone()),
+            _ => continue,
+        };
+        if let Ok(value) = std::env::var(&var_name) {
+            resolved.push((key.clone(), value));
+        } else {
+            eprintln!("Warning: secret '{key}' references unset localEnv variable '{var_name}'");
+        }
+    }
+    resolved
 }
 
 pub fn exec_in_container(

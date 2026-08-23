@@ -83,7 +83,9 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     let mut yaml = String::from("services:\n");
     yaml.push_str(&format!("  {service}:\n"));
 
-    let has_env = !config.container_env.is_empty() || !config.remote_env.is_empty();
+    let has_env = !config.container_env.is_empty()
+        || !config.remote_env.is_empty()
+        || !config.secrets.as_ref().is_none_or(|s| s.is_empty());
     let mut ports: Vec<String> = Vec::new();
     for port in &config.forward_ports {
         let port_str = match port {
@@ -112,7 +114,8 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     for m in &config.mounts {
         match m {
             MountValue::String(s) => {
-                if let Some(vol) = mount_string_to_compose_volume(s) {
+                let expanded = crate::docker::expand_vars_for_host(s, workspace_folder);
+                if let Some(vol) = mount_string_to_compose_volume(&expanded) {
                     volumes.push(vol);
                 }
             }
@@ -120,10 +123,14 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 if let Some(target) = &obj.target {
                     let mut vol = String::new();
                     if let Some(source) = &obj.source {
-                        vol.push_str(source);
+                        let expanded =
+                            crate::docker::expand_vars_for_host(source, workspace_folder);
+                        vol.push_str(&expanded);
                         vol.push(':');
                     }
-                    vol.push_str(target);
+                    let expanded_target =
+                        crate::docker::expand_vars_for_host(target, workspace_folder);
+                    vol.push_str(&expanded_target);
                     volumes.push(vol);
                 }
             }
@@ -137,6 +144,9 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         for (k, v) in config.container_env.iter().chain(config.remote_env.iter()) {
             let expanded = crate::docker::expand_vars_for_host(v, workspace_folder);
             yaml.push_str(&format!("      {k}: \"{expanded}\"\n"));
+        }
+        for (k, v) in crate::docker::resolve_secrets(config) {
+            yaml.push_str(&format!("      {k}: \"{v}\"\n"));
         }
     }
     if !ports.is_empty() {
@@ -350,4 +360,42 @@ pub fn check_compose_available() -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mount_string_to_compose_volume_basic() {
+        assert_eq!(
+            mount_string_to_compose_volume("type=bind,source=/host,target=/container,readonly"),
+            Some("/host:/container:ro".to_string())
+        );
+    }
+
+    #[test]
+    fn test_mount_string_to_compose_volume_volume() {
+        assert_eq!(
+            mount_string_to_compose_volume("type=volume,source=myvol,target=/data"),
+            Some("myvol:/data".to_string())
+        );
+    }
+
+    #[test]
+    fn test_mount_string_to_compose_volume_ro_flag() {
+        assert_eq!(
+            mount_string_to_compose_volume("type=bind,source=/a,target=/b,ro"),
+            Some("/a:/b:ro".to_string())
+        );
+        assert_eq!(
+            mount_string_to_compose_volume("type=bind,source=/a,target=/b"),
+            Some("/a:/b".to_string())
+        );
+    }
+
+    #[test]
+    fn test_mount_string_missing_target() {
+        assert_eq!(mount_string_to_compose_volume("type=bind,source=/a"), None);
+    }
 }

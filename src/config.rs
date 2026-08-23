@@ -44,6 +44,9 @@ pub struct DevContainerConfig {
     #[serde(rename = "remoteEnv", default)]
     pub remote_env: HashMap<String, String>,
 
+    #[serde(default)]
+    pub secrets: Option<HashMap<String, serde_json::Value>>,
+
     #[serde(rename = "remoteUser", default)]
     pub remote_user: Option<String>,
 

@@ -58,7 +58,10 @@ fn main() {
         Commands::ReadConfiguration {
             workspace_folder,
             config,
-        } => command::read_configuration::run(workspace_folder, config),
+            include_merged_configuration,
+        } => {
+            command::read_configuration::run(workspace_folder, config, include_merged_configuration)
+        }
     };
 
     if let Err(e) = result {

@@ -193,16 +193,165 @@ fn execute_in_container_with_env(
     workspace_folder: &Path,
     env: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<()> {
+    let mut docker_cmd = build_container_command(
+        cmd,
+        args,
+        use_shell,
+        container_name,
+        user,
+        workdir,
+        workspace_folder,
+        env,
+    )?;
+    docker_cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+
+    let status = docker_cmd
+        .status()
+        .map_err(|e| BondarError::Docker(format!("Failed to exec in container: {e}")))?;
+
+    if !status.success() {
+        return Err(BondarError::Docker(format!(
+            "Container command failed: {cmd} (exit {})",
+            status.code().unwrap_or(-1)
+        )));
+    }
+
+    Ok(())
+}
+
+pub fn spawn_container_lifecycle(
+    value: &serde_json::Value,
+    container_name: &str,
+    user: Option<&str>,
+    workdir: &str,
+    workspace_folder: &Path,
+    env: Option<&std::collections::HashMap<String, String>>,
+) -> Result<()> {
+    spawn_container_value(value, container_name, user, workdir, workspace_folder, env)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+fn spawn_container_value(
+    value: &serde_json::Value,
+    container_name: &str,
+    user: Option<&str>,
+    workdir: &str,
+    workspace_folder: &Path,
+    env: Option<&std::collections::HashMap<String, String>>,
+) -> Result<()> {
+    match value {
+        serde_json::Value::String(s) => {
+            spawn_container_command(
+                s,
+                &[],
+                true,
+                container_name,
+                user,
+                workdir,
+                workspace_folder,
+                env,
+            )?;
+        }
+        serde_json::Value::Array(arr) => {
+            if arr.is_empty() {
+                return Ok(());
+            }
+            let parts: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            if parts.is_empty() {
+                return Err(BondarError::Config(
+                    "Invalid lifecycle array command".to_string(),
+                ));
+            }
+            let cmd = &parts[0];
+            let args: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
+            spawn_container_command(
+                cmd,
+                &args,
+                false,
+                container_name,
+                user,
+                workdir,
+                workspace_folder,
+                env,
+            )?;
+        }
+        serde_json::Value::Object(map) => {
+            for (key, cmd_val) in map {
+                println!("Spawning lifecycle '{key}' in background...");
+                spawn_container_value(
+                    cmd_val,
+                    container_name,
+                    user,
+                    workdir,
+                    workspace_folder,
+                    env,
+                )?;
+            }
+        }
+        serde_json::Value::Null => {}
+        _ => {
+            return Err(BondarError::Config(format!(
+                "Invalid lifecycle command type: {value}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+fn spawn_container_command(
+    cmd: &str,
+    args: &[&str],
+    use_shell: bool,
+    container_name: &str,
+    user: Option<&str>,
+    workdir: &str,
+    workspace_folder: &Path,
+    env: Option<&std::collections::HashMap<String, String>>,
+) -> Result<()> {
+    println!(
+        "Spawning in container {container_name} (background): {cmd} {}",
+        args.join(" ")
+    );
+    let mut docker_cmd = build_container_command(
+        cmd,
+        args,
+        use_shell,
+        container_name,
+        user,
+        workdir,
+        workspace_folder,
+        env,
+    )?;
+    docker_cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    docker_cmd
+        .spawn()
+        .map_err(|e| BondarError::Docker(format!("Failed to spawn docker exec: {e}")))?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::type_complexity)]
+fn build_container_command(
+    cmd: &str,
+    args: &[&str],
+    use_shell: bool,
+    container_name: &str,
+    user: Option<&str>,
+    workdir: &str,
+    workspace_folder: &Path,
+    env: Option<&std::collections::HashMap<String, String>>,
+) -> Result<Command> {
     let expanded_cmd = crate::docker::expand_vars_for_container(cmd, workspace_folder, workdir);
     let expanded_args: Vec<String> = args
         .iter()
         .map(|a| crate::docker::expand_vars_for_container(a, workspace_folder, workdir))
         .collect();
-
-    println!(
-        "Executing in container {container_name}: {expanded_cmd} {}",
-        expanded_args.join(" ")
-    );
 
     let mut docker_cmd = Command::new("docker");
     docker_cmd.arg("exec");
@@ -235,20 +384,7 @@ fn execute_in_container_with_env(
         docker_cmd.args(&expanded_args);
     }
 
-    docker_cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-
-    let status = docker_cmd
-        .status()
-        .map_err(|e| BondarError::Docker(format!("Failed to exec in container: {e}")))?;
-
-    if !status.success() {
-        return Err(BondarError::Docker(format!(
-            "Container command failed: {expanded_cmd} (exit {})",
-            status.code().unwrap_or(-1)
-        )));
-    }
-
-    Ok(())
+    Ok(docker_cmd)
 }
 
 pub fn lifecycle_summary(config: &crate::config::DevContainerConfig) -> Vec<String> {

@@ -58,9 +58,9 @@ bondar up --workspace-folder ./sample
 }
 ```
 
-- `initializeCommand` runs on host (`workspaceFolder` as cwd)
-- `onCreate`/`updateContent`/`postCreate` run only on first `up` (new container)
-- `postStart` runs when container was stopped then started
+- `initializeCommand` runs on the host (`workspaceFolder` as cwd)
+- `onCreate`/`updateContent`/`postCreate` run only on the first `up` (new container)
+- `postStart` runs when the container was stopped then started
 - `postAttach` runs on every `up`
 
 String => `sh -c`, Array => direct exec, Object => sequential per key.
@@ -80,7 +80,7 @@ Labels `devcontainer.local_folder`, `devcontainer.config_file`, `devcontainer.id
 
 ## Not yet fully supported
 
-- `features` / `overrideFeatureInstallOrder` -> warning only
+- `features` / `overrideFeatureInstallOrder` -> requires `oras` or a registry for full installation
 - `dockerComposeFile` -> error (use `image`/`build`)
 - `hostRequirements` / `updateRemoteUserUID` / `shutdownAction` -> warning
 - `portsAttributes` -> ignored (only `forwardPorts` publish)

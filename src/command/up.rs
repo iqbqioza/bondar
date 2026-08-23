@@ -89,6 +89,7 @@ pub fn run(
         &cfg.override_feature_install_order,
         Some(&container_name),
         Some(&ws),
+        cfg.remote_user.as_deref(),
     )?;
 
     let probed_env = if let Some(probe) = &cfg.user_env_probe
@@ -121,10 +122,14 @@ pub fn run(
         }
     };
 
+    let wait_idx = wait_index(&cfg.wait_for);
+
     if newly_created {
         if let Some(cmd) = &cfg.on_create_command {
-            println!("Running onCreateCommand...");
-            lifecycle::execute_container_lifecycle_with_env(
+            run_lifecycle_step(
+                "onCreateCommand",
+                0,
+                wait_idx,
                 cmd,
                 &container_name,
                 exec_user,
@@ -134,8 +139,10 @@ pub fn run(
             )?;
         }
         if let Some(cmd) = &cfg.update_content_command {
-            println!("Running updateContentCommand...");
-            lifecycle::execute_container_lifecycle_with_env(
+            run_lifecycle_step(
+                "updateContentCommand",
+                1,
+                wait_idx,
                 cmd,
                 &container_name,
                 exec_user,
@@ -145,8 +152,10 @@ pub fn run(
             )?;
         }
         if let Some(cmd) = &cfg.post_create_command {
-            println!("Running postCreateCommand...");
-            lifecycle::execute_container_lifecycle_with_env(
+            run_lifecycle_step(
+                "postCreateCommand",
+                2,
+                wait_idx,
                 cmd,
                 &container_name,
                 exec_user,
@@ -159,8 +168,10 @@ pub fn run(
 
     let should_run_post_start = newly_created || !was_running;
     if should_run_post_start && let Some(cmd) = &cfg.post_start_command {
-        println!("Running postStartCommand...");
-        lifecycle::execute_container_lifecycle_with_env(
+        run_lifecycle_step(
+            "postStartCommand",
+            3,
+            wait_idx,
             cmd,
             &container_name,
             exec_user,
@@ -171,8 +182,10 @@ pub fn run(
     }
 
     if let Some(cmd) = &cfg.post_attach_command {
-        println!("Running postAttachCommand...");
-        lifecycle::execute_container_lifecycle_with_env(
+        run_lifecycle_step(
+            "postAttachCommand",
+            4,
+            wait_idx,
             cmd,
             &container_name,
             exec_user,
@@ -193,8 +206,8 @@ pub fn run(
         ];
         if !valid.contains(&wait.as_str()) {
             eprintln!("Warning: waitFor '{wait}' is not a valid lifecycle command");
-        } else {
-            println!("waitFor: {wait} (handled as sequential execution)");
+        } else if wait_idx < 5 {
+            println!("waitFor: {wait} - commands after this run in background");
         }
     }
 
@@ -206,6 +219,54 @@ pub fn run(
     println!("  Use 'bondar down' to stop and remove");
 
     Ok(())
+}
+
+fn wait_index(wait: &Option<String>) -> usize {
+    const ORDER: [&str; 5] = [
+        "onCreateCommand",
+        "updateContentCommand",
+        "postCreateCommand",
+        "postStartCommand",
+        "postAttachCommand",
+    ];
+    wait.as_ref()
+        .and_then(|w| ORDER.iter().position(|&x| x == w))
+        .unwrap_or(usize::MAX)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_lifecycle_step(
+    name: &str,
+    step_idx: usize,
+    wait_idx: usize,
+    cmd: &serde_json::Value,
+    container_name: &str,
+    exec_user: Option<&str>,
+    workspace_target: &str,
+    ws: &std::path::Path,
+    lifecycle_env: Option<&std::collections::HashMap<String, String>>,
+) -> Result<()> {
+    if step_idx > wait_idx {
+        println!("Running {name} in background (waitFor)...");
+        lifecycle::spawn_container_lifecycle(
+            cmd,
+            container_name,
+            exec_user,
+            workspace_target,
+            ws,
+            lifecycle_env,
+        )
+    } else {
+        println!("Running {name}...");
+        lifecycle::execute_container_lifecycle_with_env(
+            cmd,
+            container_name,
+            exec_user,
+            workspace_target,
+            ws,
+            lifecycle_env,
+        )
+    }
 }
 
 fn run_compose(
@@ -253,6 +314,7 @@ fn run_compose(
         &cfg.override_feature_install_order,
         Some(&container_name),
         Some(ws),
+        cfg.remote_user.as_deref(),
     )
     .ok();
 

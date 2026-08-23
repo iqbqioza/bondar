@@ -8,7 +8,7 @@ pub fn handle_features(
     features: &Option<HashMap<String, serde_json::Value>>,
     override_order: &Option<Vec<String>>,
 ) -> Result<()> {
-    handle_features_with_container(features, override_order, None, None)
+    handle_features_with_container(features, override_order, None, None, None)
 }
 
 pub fn handle_features_with_container(
@@ -16,6 +16,7 @@ pub fn handle_features_with_container(
     override_order: &Option<Vec<String>>,
     container_name: Option<&str>,
     workspace_folder: Option<&Path>,
+    container_user: Option<&str>,
 ) -> Result<()> {
     let Some(feat_map) = features else {
         return Ok(());
@@ -45,12 +46,12 @@ pub fn handle_features_with_container(
         println!("Installing features in override order:");
         for id in order {
             if let Some(opts) = feat_map.get(id) {
-                install_feature(id, opts, container_name, workspace_folder)?;
+                install_feature(id, opts, container_name, workspace_folder, container_user)?;
             }
         }
         for (id, opts) in feat_map {
             if !order.contains(id) {
-                install_feature(id, opts, container_name, workspace_folder)?;
+                install_feature(id, opts, container_name, workspace_folder, container_user)?;
             }
         }
     } else {
@@ -58,7 +59,7 @@ pub fn handle_features_with_container(
         println!("Installing features in installsAfter order:");
         for id in sorted {
             if let Some(opts) = feat_map.get(&id) {
-                install_feature(&id, opts, container_name, workspace_folder)?;
+                install_feature(&id, opts, container_name, workspace_folder, container_user)?;
             }
         }
     }
@@ -225,11 +226,22 @@ fn install_in_container(
         return Ok(());
     }
 
-    println!("  Found install.sh, executing inside {container}...");
+    println!(
+        "  Found install.sh, executing inside {container} (as root, per devcontainer spec)..."
+    );
     let mut exec_cmd = std::process::Command::new("docker");
     exec_cmd.arg("exec");
+    // Feature install scripts must run as root by spec; user info is passed via env
     if let Some(user) = container_user {
-        exec_cmd.arg("--user").arg(user);
+        exec_cmd.arg("-e").arg(format!("_CONTAINER_USER={user}"));
+        exec_cmd.arg("-e").arg(format!("_REMOTE_USER={user}"));
+        exec_cmd.arg("-e").arg(format!("_USERNAME={user}"));
+        exec_cmd
+            .arg("-e")
+            .arg(format!("_CONTAINER_USER_HOME=/home/{user}"));
+        exec_cmd
+            .arg("-e")
+            .arg(format!("_REMOTE_USER_HOME=/home/{user}"));
     }
     exec_cmd.arg(container);
     exec_cmd.arg("sh").arg("-c").arg(format!(
@@ -246,11 +258,6 @@ fn install_in_container(
             };
             exec_cmd.arg("-e").arg(format!("{k}={value}"));
         }
-    }
-    if let Some(user) = container_user {
-        exec_cmd.arg("-e").arg(format!("_CONTAINER_USER={user}"));
-        exec_cmd.arg("-e").arg(format!("_REMOTE_USER={user}"));
-        exec_cmd.arg("-e").arg(format!("_USERNAME={user}"));
     }
 
     let (ok, stderr) = run_output(&mut exec_cmd, "install.sh")?;
@@ -275,11 +282,18 @@ fn install_in_container(
     Ok(())
 }
 
+fn read_feature_metadata(dir: &Path) -> Option<serde_json::Value> {
+    let path = dir.join("devcontainer-features.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 fn install_feature(
     id: &str,
     opts: &serde_json::Value,
     container_name: Option<&str>,
     _workspace_folder: Option<&Path>,
+    container_user: Option<&str>,
 ) -> Result<()> {
     if !id.contains('/') && !id.contains('.') {
         eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
@@ -304,13 +318,26 @@ fn install_feature(
         return Ok(());
     }
 
+    // Read devcontainer-features.json metadata for installsAfter dependencies
+    if let Some(meta) = read_feature_metadata(&dest_dir)
+        && let Some(after) = meta.get("installsAfter").and_then(|v| v.as_array())
+    {
+        let deps: Vec<String> = after
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        if !deps.is_empty() {
+            println!("  Feature declares installsAfter: {deps:?}");
+        }
+    }
+
     if let Some(container) = container_name {
         let container_path = format!("/tmp/bondar_features/{}", sanitize_id(id));
         if let Err(e) = copy_feature_into_container(&dest_dir, container, &container_path) {
             eprintln!("  Warning: could not copy feature into container: {e}");
             return Ok(());
         }
-        install_in_container(id, opts, container, &container_path, None)?;
+        install_in_container(id, opts, container, &container_path, container_user)?;
     } else {
         println!(
             "  Feature {id} fetched to {}. Execution requires a running container (use 'bondar up' first).",
@@ -339,5 +366,34 @@ mod tests {
             sanitize_id("ghcr.io/devcontainers/features/common-utils:2"),
             "ghcr-io-devcontainers-features-common-utils-2"
         );
+    }
+
+    #[test]
+    fn test_sort_by_installs_after_orders_dependencies() {
+        let mut feat_map: HashMap<String, serde_json::Value> = HashMap::new();
+        feat_map.insert(
+            "ghcr.io/a/child".to_string(),
+            serde_json::json!({ "installsAfter": ["ghcr.io/a/base"] }),
+        );
+        feat_map.insert("ghcr.io/a/base".to_string(), serde_json::json!({}));
+        let sorted = sort_by_installs_after(&feat_map);
+        let base_pos = sorted.iter().position(|x| x == "ghcr.io/a/base").unwrap();
+        let child_pos = sorted.iter().position(|x| x == "ghcr.io/a/child").unwrap();
+        assert!(base_pos < child_pos);
+    }
+
+    #[test]
+    fn test_sort_by_installs_after_no_circular_hang() {
+        let mut feat_map: HashMap<String, serde_json::Value> = HashMap::new();
+        feat_map.insert(
+            "ghcr.io/a/x".to_string(),
+            serde_json::json!({ "installsAfter": ["ghcr.io/a/y"] }),
+        );
+        feat_map.insert(
+            "ghcr.io/a/y".to_string(),
+            serde_json::json!({ "installsAfter": ["ghcr.io/a/x"] }),
+        );
+        let sorted = sort_by_installs_after(&feat_map);
+        assert_eq!(sorted.len(), 2);
     }
 }

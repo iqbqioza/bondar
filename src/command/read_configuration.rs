@@ -8,7 +8,11 @@ use crate::error::Result;
 
 static SCHEMA_JSON: &str = include_str!("../schemas/devcontainer.schema.json");
 
-pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> Result<()> {
+pub fn run(
+    workspace_folder: Option<PathBuf>,
+    config_path: Option<PathBuf>,
+    include_merged_configuration: bool,
+) -> Result<()> {
     let ws = docker::get_workspace_folder(workspace_folder)?;
     let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
@@ -114,5 +118,55 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
         );
     }
 
+    if include_merged_configuration {
+        print_merged_configuration(&cfg, &ws);
+    }
+
     Ok(())
+}
+
+fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::Path) {
+    use serde_json::{Map, Value, json};
+
+    let mut merged: Map<String, Value> = Map::new();
+
+    let mut env: Map<String, Value> = Map::new();
+    for (k, v) in cfg.container_env.iter().chain(cfg.remote_env.iter()) {
+        let expanded = docker::expand_vars_for_host(v, ws);
+        env.insert(k.clone(), Value::String(expanded));
+    }
+    for (k, v) in docker::resolve_secrets(cfg) {
+        env.insert(k, Value::String(v));
+    }
+
+    merged.insert("name".into(), json!(cfg.name));
+    merged.insert("image".into(), json!(cfg.image));
+    merged.insert("workspaceFolder".into(), json!(cfg.workspace_folder));
+    merged.insert("remoteUser".into(), json!(cfg.remote_user));
+    merged.insert("containerUser".into(), json!(cfg.container_user));
+    merged.insert("mergedEnvironment".into(), Value::Object(env));
+    merged.insert(
+        "forwardPorts".into(),
+        json!(
+            cfg.forward_ports
+                .iter()
+                .map(|p| match p {
+                    config::ForwardPort::Number(n) => n.to_string(),
+                    config::ForwardPort::Text(s) => s.clone(),
+                })
+                .collect::<Vec<_>>()
+        ),
+    );
+    merged.insert("mounts".into(), json!(cfg.mounts));
+    merged.insert("features".into(), json!(cfg.features));
+    merged.insert("containerName".into(), json!(cfg.container_name(ws)));
+    merged.insert(
+        "defaultWorkspaceFolder".into(),
+        json!(cfg.workspace_folder_or_default()),
+    );
+
+    println!("\n--- Merged configuration ---");
+    if let Ok(json_str) = serde_json::to_string_pretty(&Value::Object(merged)) {
+        println!("{json_str}");
+    }
 }

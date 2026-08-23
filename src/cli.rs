@@ -122,5 +122,9 @@ pub enum Commands {
         /// Override path to devcontainer.json
         #[arg(long)]
         config: Option<PathBuf>,
+
+        /// Print the merged configuration (env, secrets, defaults applied)
+        #[arg(long)]
+        include_merged_configuration: bool,
     },
 }
