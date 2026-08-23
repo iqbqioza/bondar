@@ -54,10 +54,12 @@ pub fn run(
     }
 
     // Typed parse; type errors are reported as validation errors
+    let mut typed_ok = true;
     let cfg: config::DevContainerConfig = match serde_json::from_str(&stripped) {
         Ok(c) => c,
         Err(e) => {
             errors.push(format!("  {e}"));
+            typed_ok = false;
             config::DevContainerConfig::default()
         }
     };
@@ -105,8 +107,10 @@ pub fn run(
         }
     };
     // Include the internal validation checks (e.g. absolute workspaceFolder,
-    // env keys without '=', non-empty mounts) as reported errors
-    if let Err(e) = cfg.validate() {
+    // env keys without '=', non-empty mounts) as reported errors. When the
+    // typed parse failed, the default config would add unrelated errors, so
+    // those checks are skipped.
+    if typed_ok && let Err(e) = cfg.validate() {
         let msg = e.to_string().replace("Config error: ", "");
         push_error(&mut errors, format!("  {msg}"));
     }
@@ -119,7 +123,10 @@ pub fn run(
             "postStartCommand",
         ];
         if !valid.contains(&wait.as_str()) {
-            push_error(&mut errors, format!("  waitFor '{wait}' is invalid"));
+            // Skip when the schema already reported this (message differs)
+            if !errors.iter().any(|e| e.contains("waitFor")) {
+                push_error(&mut errors, format!("  waitFor '{wait}' is invalid"));
+            }
         }
     }
 
@@ -179,12 +186,22 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     } else {
         cfg.workspace_folder_or_default()
     };
-    for (k, v) in cfg.container_env.iter().chain(cfg.remote_env.iter()) {
-        let expanded = docker::expand_vars_for_host_with_target(v, ws, &target);
-        env.insert(k.clone(), Value::String(expanded));
+    // Container env and remote env (null remoteEnv entries are skipped)
+    let all_env: Vec<(&String, Option<&str>)> = cfg
+        .container_env
+        .iter()
+        .map(|(k, v)| (k, Some(v.as_str())))
+        .chain(cfg.remote_env.iter().map(|(k, v)| (k, v.as_deref())))
+        .collect();
+    for (k, v) in &all_env {
+        let Some(val) = v else {
+            continue;
+        };
+        let expanded = docker::expand_vars_for_host_with_target(val, ws, &target);
+        env.insert((*k).clone(), Value::String(expanded));
     }
     // Resolve ${containerEnv:KEY} references from the original values against
-    // the containerEnv entries (same two-pass approach as docker run)
+    // the containerEnv entries (same approach as docker run)
     let container_env_map: std::collections::HashMap<String, String> = cfg
         .container_env
         .iter()
@@ -195,19 +212,25 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
             )
         })
         .collect();
-    for (k, v) in cfg.container_env.iter().chain(cfg.remote_env.iter()) {
-        let skip = if cfg.container_env.contains_key(k) {
-            Some(k.as_str())
+    for (k, v) in &all_env {
+        let Some(val) = v else {
+            continue;
+        };
+        let skip = if cfg.container_env.contains_key(*k) {
+            Some((*k).as_str())
         } else {
             None
         };
-        let from_map = docker::expand_container_env_from_map(v, &container_env_map, skip);
+        let from_map = docker::expand_container_env_from_map(val, &container_env_map, skip);
         let resolved = docker::expand_vars_for_host_with_target(&from_map, ws, &target);
-        env.insert(k.clone(), Value::String(resolved));
+        env.insert((*k).clone(), Value::String(resolved));
     }
-    for (k, v) in docker::resolve_secrets(cfg) {
-        env.insert(k, Value::String(v));
-    }
+    // Secret values are never printed; only their key names are listed.
+    let secret_names: Vec<String> = cfg
+        .secrets
+        .as_ref()
+        .map(|s| s.keys().cloned().collect())
+        .unwrap_or_default();
 
     let default_name = ws
         .file_name()
@@ -222,6 +245,7 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     merged.insert("remoteUser".into(), json!(cfg.remote_user));
     merged.insert("containerUser".into(), json!(cfg.container_user));
     merged.insert("mergedEnvironment".into(), Value::Object(env));
+    merged.insert("secrets".into(), json!(secret_names));
     merged.insert(
         "forwardPorts".into(),
         json!(

@@ -14,6 +14,17 @@ pub fn run(
 ) -> Result<()> {
     docker::check_docker_available()?;
 
+    if let Some(u) = &user
+        && u.is_empty()
+    {
+        eprintln!("Warning: --user is empty; ignoring it");
+    }
+    if let Some(w) = &workdir
+        && w.is_empty()
+    {
+        eprintln!("Warning: --workdir is empty; ignoring it");
+    }
+
     let ws = docker::get_workspace_folder(workspace_folder)?;
     let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
@@ -47,11 +58,12 @@ pub fn run(
         .or(cfg.workspace_folder.clone());
 
     let env = merged_exec_env(&cfg, &container_name, exec_user.as_deref());
+    let default_target = cfg.workspace_folder_or_default();
     let container_env_map: std::collections::HashMap<String, String> = cfg
         .container_env
         .iter()
         .map(|(k, v)| {
-            let target = exec_workdir.as_deref().unwrap_or("/workspace");
+            let target = exec_workdir.as_deref().unwrap_or(&default_target);
             (
                 k.clone(),
                 docker::expand_vars_for_host_with_target(v, &ws, target),
@@ -76,7 +88,7 @@ pub fn merged_exec_env(
     container_name: &str,
     exec_user: Option<&str>,
 ) -> Option<std::collections::HashMap<String, String>> {
-    let mut merged = cfg.remote_env.clone();
+    let mut merged = cfg.remote_env_resolved();
     if let Some(probe) = &cfg.user_env_probe
         && probe != "none"
         && let Some(probed) = host::probe_user_env(container_name, exec_user, probe)
@@ -101,10 +113,10 @@ pub fn compose_exec_env(
 ) -> Option<std::collections::HashMap<String, String>> {
     if let Ok(container_name) = crate::compose::get_service_container_name(cfg, cfg_path, ws) {
         merged_exec_env(cfg, &container_name, exec_user)
-    } else if cfg.remote_env.is_empty() {
+    } else if cfg.remote_env_resolved().is_empty() {
         None
     } else {
-        Some(cfg.remote_env.clone())
+        Some(cfg.remote_env_resolved())
     }
 }
 
@@ -115,7 +127,7 @@ mod tests {
     #[test]
     fn test_merged_exec_env_without_probe() {
         let cfg = config::DevContainerConfig {
-            remote_env: std::collections::HashMap::from([("A".to_string(), "1".to_string())]),
+            remote_env: std::collections::HashMap::from([("A".to_string(), Some("1".to_string()))]),
             ..Default::default()
         };
         let env = merged_exec_env(&cfg, "container", None).unwrap();

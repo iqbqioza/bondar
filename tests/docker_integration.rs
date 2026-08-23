@@ -3,6 +3,17 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_bondar");
 
+/// Same FNV-1a hash bondar uses for the per-workspace compose project name.
+fn project_name_for(ws: &std::path::Path) -> String {
+    let ws_str = ws.to_string_lossy().to_string();
+    let mut hash: u64 = 14695981039346656037;
+    for b in ws_str.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    format!("bondar-{}", &format!("{hash:016x}")[..8])
+}
+
 fn docker_available() -> bool {
     Command::new("docker")
         .arg("version")
@@ -126,7 +137,7 @@ fn test_build_roundtrip() {
     let down = bondar(&["down", "--workspace-folder", ws_str]);
     assert!(down.status.success());
     let _ = Command::new("docker")
-        .args(["rmi", "bondar-int-build"])
+        .args(["rmi", "-f", "bondar-int-build"])
         .output();
 
     cleanup(&ws);
@@ -320,21 +331,24 @@ fn test_wait_for_background() {
     );
     assert!(String::from_utf8_lossy(&up.stdout).contains("in background"));
 
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    let exec = bondar(&[
-        "exec",
-        "--workspace-folder",
-        ws_str,
-        "--",
-        "cat",
-        "/tmp/oc.txt",
-    ]);
-    assert!(
-        exec.status.success(),
-        "background onCreate did not run: {}",
-        String::from_utf8_lossy(&exec.stderr)
-    );
-    assert!(String::from_utf8_lossy(&exec.stdout).contains("created"));
+    // Poll instead of a fixed sleep so slow CI does not flake
+    let mut ok = false;
+    for _ in 0..50 {
+        let exec = bondar(&[
+            "exec",
+            "--workspace-folder",
+            ws_str,
+            "--",
+            "cat",
+            "/tmp/oc.txt",
+        ]);
+        if exec.status.success() && String::from_utf8_lossy(&exec.stdout).contains("created") {
+            ok = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert!(ok, "background onCreate did not run in time");
 
     let down = bondar(&["down", "--workspace-folder", ws_str]);
     assert!(down.status.success());
@@ -459,10 +473,11 @@ fn test_compose_stop_action() {
     );
     assert!(String::from_utf8_lossy(&down.stdout).contains("compose stop"));
 
-    // Cleanup leftover compose project
+    // Cleanup leftover compose project (same project name bondar uses)
     let ws_str = ws.join("docker-compose.yml").to_str().unwrap().to_string();
+    let project = project_name_for(&ws);
     let _ = Command::new("docker")
-        .args(["compose", "-f", &ws_str, "down"])
+        .args(["compose", "--project-name", &project, "-f", &ws_str, "down"])
         .current_dir(&ws)
         .output();
     cleanup(&ws);
@@ -527,7 +542,7 @@ fn test_build_no_cache() {
     );
 
     let _ = Command::new("docker")
-        .args(["rmi", "bondar-int-nocache"])
+        .args(["rmi", "-f", "bondar-int-nocache"])
         .output();
     cleanup(&ws);
 }

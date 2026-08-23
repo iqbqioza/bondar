@@ -32,7 +32,7 @@ pub struct ContainerExec<'a> {
 }
 
 pub fn execute_host_lifecycle(value: &serde_json::Value, workspace_folder: &Path) -> Result<()> {
-    execute_value_with_env(value, workspace_folder, None, None)
+    execute_value_with_env(value, workspace_folder, None)
 }
 
 pub fn execute_container_lifecycle_with_env(
@@ -52,14 +52,13 @@ pub fn execute_container_lifecycle_with_env(
         env,
         container_env,
     };
-    execute_value_with_env(value, workspace_folder, Some(&exec), None)
+    execute_value_with_env(value, workspace_folder, Some(&exec))
 }
 
 fn execute_value_with_env(
     value: &serde_json::Value,
     workspace_folder: &Path,
     container: Option<&ContainerExec<'_>>,
-    _label: Option<&str>,
 ) -> Result<()> {
     match value {
         serde_json::Value::String(s) => {
@@ -88,9 +87,10 @@ fn execute_value_with_env(
             execute_single_command_with_env(cmd, &args, false, workspace_folder, container)?;
         }
         serde_json::Value::Object(map) => {
+            // serde_json preserves declaration order (preserve_order feature)
             for (key, cmd_val) in map {
                 println!("Running lifecycle '{key}'...");
-                execute_value_with_env(cmd_val, workspace_folder, container, Some(key))?;
+                execute_value_with_env(cmd_val, workspace_folder, container)?;
             }
         }
         serde_json::Value::Null => {}
@@ -341,22 +341,46 @@ fn build_container_command(
 
 pub fn lifecycle_summary(config: &crate::config::DevContainerConfig) -> Vec<String> {
     let mut cmds = Vec::new();
-    if config.initialize_command.is_some() {
+    if config
+        .initialize_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("initializeCommand".to_string());
     }
-    if config.on_create_command.is_some() {
+    if config
+        .on_create_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("onCreateCommand".to_string());
     }
-    if config.update_content_command.is_some() {
+    if config
+        .update_content_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("updateContentCommand".to_string());
     }
-    if config.post_create_command.is_some() {
+    if config
+        .post_create_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("postCreateCommand".to_string());
     }
-    if config.post_start_command.is_some() {
+    if config
+        .post_start_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("postStartCommand".to_string());
     }
-    if config.post_attach_command.is_some() {
+    if config
+        .post_attach_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("postAttachCommand".to_string());
     }
     cmds

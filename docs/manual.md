@@ -177,7 +177,7 @@ Supported variable expansion:
 | `${containerEnv:VAR[:default]}` | Value of the environment variable (resolved from `containerEnv` when set, otherwise from the host) |
 | `${devcontainerId}` | Stable identifier derived from the workspace path |
 
-`secrets` supports the `{"localEnv": "VAR"}` form. The file-path string form is warned and skipped.
+`secrets` supports the `{"localEnv": "VAR"}` form. The file-path string form is warned and skipped. Both the JSON Schema validation in `read-configuration` and bondar itself accept the `localEnv` form.
 
 ### Mounts
 
@@ -209,6 +209,7 @@ Supported variable expansion:
 - IPv6 addresses use bracket form (`[::1]:8080`).
 - `/udp` suffix and `portsAttributes` `protocol: "udp"` are honored.
 - `portsAttributes`/`otherPortsAttributes` `onAutoForward: "ignore"` disables publishing.
+- `portsAttributes` keys are matched against the *container port number* (or range). Regex keys (e.g. `.+/server.js`) cannot be evaluated at publish time and are ignored, since bondar has no running process list.
 
 ### Lifecycle scripts
 
@@ -224,12 +225,14 @@ Supported variable expansion:
 }
 ```
 
-- String values run through the shell (`sh -c` on Unix, `cmd /C` on Windows).
+- String values run through the shell (`sh -c` on Unix, `cmd /C` on Windows); the whole string is one shell command line.
 - Array values run directly without a shell.
 - Object values run each key sequentially (in declaration order).
 - `initializeCommand` runs on the host; the others run inside the container.
 - `waitFor` accepts `initializeCommand`, `onCreateCommand`, `updateContentCommand`, `postCreateCommand`, `postStartCommand`; scripts after the selected one run in the background.
 - Script failures stop subsequent scripts.
+
+Note: the devcontainer spec defaults `waitFor` to `updateContentCommand` (so later scripts run in the background while an editor starts). bondar runs all lifecycle scripts synchronously unless `waitFor` is set, since a terminal CLI has no UI to start.
 
 ### Features
 
@@ -264,6 +267,7 @@ Supported variable expansion:
 - `runServices` limits the services started.
 - `containerEnv`, `secrets`, `forwardPorts`, `appPort` and `mounts` are injected via a generated `compose.override.yml` (in the OS temp directory).
 - `--remove-existing-container` passes `--force-recreate`; `--no-build` passes `--no-build`.
+- Each workspace gets a stable per-workspace compose project name (`bondar-<hash>`), so workspaces with the same directory name never share containers, networks or override files.
 
 ### Host requirements
 

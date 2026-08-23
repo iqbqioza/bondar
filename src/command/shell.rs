@@ -47,11 +47,12 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     ];
 
     let env = crate::command::exec::merged_exec_env(&cfg, &container_name, user.as_deref());
+    let default_target = cfg.workspace_folder_or_default();
     let container_env_map: std::collections::HashMap<String, String> = cfg
         .container_env
         .iter()
         .map(|(k, v)| {
-            let target = workdir.as_deref().unwrap_or("/workspace");
+            let target = workdir.as_deref().unwrap_or(&default_target);
             (
                 k.clone(),
                 crate::docker::expand_vars_for_host_with_target(v, &ws, target),

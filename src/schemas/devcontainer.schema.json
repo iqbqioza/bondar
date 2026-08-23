@@ -66,6 +66,10 @@
 									"type": "string",
 									"format": "uri",
 									"description": "A URL to documentation about the secret."
+								},
+								"localEnv": {
+									"type": "string",
+									"description": "The name of the host environment variable providing the secret value (bondar supported form)."
 								}
 							},
 							"additionalProperties": false
@@ -82,11 +86,11 @@
 							{
 								"type": "integer",
 								"maximum": 65535,
-								"minimum": 0
+								"minimum": 1
 							},
 							{
 								"type": "string",
-								"pattern": "^([a-z0-9-]+):(\\d{1,5})$"
+								"pattern": "^(\\[[^\\]]+\\]:)?([a-zA-Z0-9._-]+:)?(\\d{1,5}(-\\d{1,5})?)(:\\d{1,5}(-\\d{1,5})?)?(/(udp|tcp))?$"
 							}
 						]
 					}
@@ -509,7 +513,8 @@
 						"type": [
 							"integer",
 							"string"
-						]
+						],
+						"minimum": 1
 					}
 				},
 				"runArgs": {
@@ -720,6 +725,10 @@
 				"target": {
 					"type": "string",
 					"description": "Mount target."
+				},
+				"readonly": {
+					"type": "boolean",
+					"description": "Whether the mount is read-only."
 				}
 			},
 			"required": [

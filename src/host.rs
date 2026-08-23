@@ -16,6 +16,8 @@ pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path
                     "Warning: hostRequirements.cpus {c} required but only {available} available"
                 );
             }
+        } else {
+            eprintln!("Warning: hostRequirements.cpus must be an integer, got {cpus}");
         }
     }
 
@@ -98,17 +100,27 @@ fn available_cpus() -> u64 {
 #[cfg(target_os = "linux")]
 fn available_memory_bytes() -> Option<u64> {
     let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+    // Prefer MemAvailable (actual free memory) over MemTotal
+    let mut mem_available = None;
+    let mut mem_total = None;
     for line in content.lines() {
-        if line.starts_with("MemTotal:") {
+        if line.starts_with("MemAvailable:") {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2
                 && let Ok(kb) = parts[1].parse::<u64>()
             {
-                return Some(kb * 1024);
+                mem_available = Some(kb * 1024);
+            }
+        } else if line.starts_with("MemTotal:") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2
+                && let Ok(kb) = parts[1].parse::<u64>()
+            {
+                mem_total = Some(kb * 1024);
             }
         }
     }
-    None
+    mem_available.or(mem_total)
 }
 
 #[cfg(target_os = "macos")]
@@ -175,7 +187,8 @@ fn parse_size(s: &str) -> Option<u64> {
     } else if lower.ends_with("kb") {
         (&lower[..lower.len() - 2], 1024)
     } else {
-        return None;
+        // Unitless values are bytes (the schema pattern allows e.g. "0" or "1024")
+        return lower.trim().parse::<u64>().ok();
     };
     let num: f64 = num_str.trim().parse().ok()?;
     Some((num * mult as f64) as u64)
@@ -245,23 +258,31 @@ pub fn handle_update_remote_user_uid(
         .args(["exec", container_name, "id", user])
         .output();
 
-    let user_exists = match &check_user {
-        Ok(output) => output.status.success(),
-        Err(_) => false,
+    // A spawn failure (docker unavailable) must not trigger user creation
+    let Ok(check_user) = check_user else {
+        eprintln!(
+            "Warning: failed to run 'docker exec id {user}' (is the docker daemon running?); skipping updateRemoteUserUID"
+        );
+        return Ok(());
     };
+    let user_exists = check_user.status.success();
 
-    if let Ok(output) = &check_user {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // stdout like uid=1000(vscode) gid=1000(vscode)
-            if let Some(current_uid) = parse_id_output(&stdout, "uid=")
-                && current_uid == host_uid
-            {
-                return Ok(());
-            }
-        } else {
-            eprintln!("Warning: user '{user}' not found in container; will attempt to create it");
+    if check_user.status.success() {
+        let stdout = String::from_utf8_lossy(&check_user.stdout);
+        // stdout like uid=1000(vscode) gid=1000(vscode)
+        let current_uid = parse_id_output(&stdout, "uid=");
+        let current_gid = parse_id_output(&stdout, "gid=");
+        if current_uid == Some(host_uid) && current_gid == Some(host_gid) {
+            return Ok(());
         }
+        if current_uid != Some(host_uid) {
+            eprintln!("Updating UID for {user} from {current_uid:?} to {host_uid}");
+        }
+        if current_gid != Some(host_gid) {
+            eprintln!("Updating GID for {user} from {current_gid:?} to {host_gid}");
+        }
+    } else {
+        eprintln!("Warning: user '{user}' not found in container; will attempt to create it");
     }
 
     if user_exists {
@@ -295,14 +316,7 @@ pub fn handle_update_remote_user_uid(
 
         // Resolve the user's primary group name before groupmod, since the group
         // may not share the user's name (e.g. user "node" with group "node" vs "users").
-        let primary_group = std::process::Command::new("docker")
-            .args(["exec", container_name, "id", "-g", "-n", user])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .filter(|s| !s.is_empty());
-        let group_target = primary_group.as_deref().unwrap_or(user);
+        let group_target = resolve_primary_group(container_name, user);
 
         let groupmod = std::process::Command::new("docker")
             .args([
@@ -313,7 +327,7 @@ pub fn handle_update_remote_user_uid(
                 "groupmod",
                 "-g",
                 &host_gid.to_string(),
-                group_target,
+                &group_target,
             ])
             .output();
 
@@ -323,7 +337,7 @@ pub fn handle_update_remote_user_uid(
             }
             Ok(o) => {
                 let stderr = String::from_utf8_lossy(&o.stderr);
-                if !stderr.contains("no such") {
+                if !stderr.to_lowercase().contains("no such") {
                     eprintln!("Warning: groupmod failed for {group_target}: {stderr}");
                 }
             }
@@ -469,6 +483,8 @@ fn chown_workspace(config: &crate::config::DevContainerConfig, container_name: &
         );
         return;
     }
+    // Use the user's primary group name (may differ from the user name)
+    let group = resolve_primary_group(container_name, user);
     let chown = std::process::Command::new("docker")
         .args([
             "exec",
@@ -477,7 +493,7 @@ fn chown_workspace(config: &crate::config::DevContainerConfig, container_name: &
             container_name,
             "chown",
             "-R",
-            &format!("{user}:{user}"),
+            &format!("{user}:{group}"),
             &chown_target,
         ])
         .output();
@@ -486,11 +502,22 @@ fn chown_workspace(config: &crate::config::DevContainerConfig, container_name: &
             println!("Chowned {chown_target} to {user}");
         } else {
             let stderr = String::from_utf8_lossy(&o.stderr);
-            if !stderr.contains("No such") {
+            if !stderr.to_lowercase().contains("no such") {
                 eprintln!("Warning: chown failed: {stderr}");
             }
         }
     }
+}
+
+fn resolve_primary_group(container_name: &str, user: &str) -> String {
+    std::process::Command::new("docker")
+        .args(["exec", container_name, "id", "-g", "-n", user])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| user.to_string())
 }
 
 #[cfg(unix)]
@@ -579,6 +606,10 @@ mod tests {
         assert_eq!(parse_size("gb"), None);
         assert_eq!(parse_size(""), None);
         assert_eq!(parse_size("1.5"), None);
+        // Unitless values are bytes (schema pattern allows them)
+        assert_eq!(parse_size("0"), Some(0));
+        assert_eq!(parse_size("1024"), Some(1024));
+        assert_eq!(parse_size("2TB"), Some(2 * 1024u64.pow(4)));
     }
 
     #[test]

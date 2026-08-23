@@ -57,7 +57,7 @@ pub fn build_image(
 
     if !dockerfile_path.exists() {
         return Err(BondarError::NotFound(format!(
-            "Dockerfile not found: {}",
+            "Dockerfile not found: {} (resolved relative to the devcontainer.json directory)",
             dockerfile_path.display()
         )));
     }
@@ -71,22 +71,20 @@ pub fn build_image(
         })
         .unwrap_or_else(|| config_dir.to_path_buf());
 
-    let context_str = context.to_string_lossy().to_string();
-    let dockerfile_str = dockerfile_path.to_string_lossy().to_string();
+    let context_str = context
+        .to_str()
+        .ok_or_else(|| BondarError::Config("Build context path is not valid UTF-8".to_string()))?;
+    let dockerfile_str = dockerfile_path
+        .to_str()
+        .ok_or_else(|| BondarError::Config("Dockerfile path is not valid UTF-8".to_string()))?;
 
     let mut cmd = Command::new("docker");
     cmd.arg("build");
-    cmd.arg("-f").arg(&dockerfile_str);
+    cmd.arg("-f").arg(dockerfile_str);
     cmd.arg("-t").arg(image_name);
 
     for (k, v) in &build.args {
         let expanded = expand_vars_for_host(v, workspace_folder);
-        if expanded.is_empty() {
-            eprintln!(
-                "Warning: build arg '{k}' resolved to an empty value (unset variable?); skipping"
-            );
-            continue;
-        }
         cmd.arg("--build-arg").arg(format!("{k}={expanded}"));
     }
 
@@ -118,7 +116,7 @@ pub fn build_image(
         cmd.arg("--no-cache");
     }
 
-    cmd.arg(&context_str);
+    cmd.arg(context_str);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
     println!("Building image {image_name}...");
@@ -142,7 +140,7 @@ pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) 
             let sanitized: String = name
                 .chars()
                 .map(|c| {
-                    if c.is_alphanumeric() {
+                    if c.is_ascii_alphanumeric() {
                         c.to_ascii_lowercase()
                     } else {
                         '-'
@@ -163,7 +161,7 @@ pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) 
             let sanitized: String = basename
                 .chars()
                 .map(|c| {
-                    if c.is_alphanumeric() {
+                    if c.is_ascii_alphanumeric() {
                         c.to_ascii_lowercase()
                     } else {
                         '-'
@@ -234,7 +232,8 @@ pub fn container_exists_and_running(name: &str) -> Result<(bool, bool)> {
         };
         if n.trim() == name {
             let status = parts.next().unwrap_or("");
-            return Ok((true, status.starts_with("Up")));
+            let running = status.starts_with("Up") || status.starts_with("Restarting");
+            return Ok((true, running));
         }
     }
     Ok((false, false))
@@ -453,19 +452,13 @@ pub fn create_and_start_container(
         }
     }
     // Env - containerEnv is set on the container; remoteEnv applies only at exec time
-    // Pass 1: expand generic vars (${containerEnv:...} may be consumed here)
-    let mut expanded_env: HashMap<String, String> = HashMap::new();
+    // ${containerEnv:KEY} references resolve against the raw containerEnv entries
+    // (cycle-safe, bounded), then generic expansion (${localEnv:} etc.) applies.
     for (k, v) in &config.container_env {
-        let expanded_v = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
-        expanded_env.insert(k.clone(), expanded_v);
-    }
-    // Pass 2: resolve ${containerEnv:KEY} from the original values against the
-    // expanded map, then apply generic expansion to the substituted result
-    for (k, v) in &config.container_env {
-        let from_map = expand_container_env_from_map(v, &expanded_env, Some(k));
-        let resolved =
-            expand_vars_for_host_with_target(&from_map, workspace_folder, &workspace_target);
-        cmd.arg("-e").arg(format!("{k}={resolved}"));
+        let resolved = resolve_container_env_value(v, &config.container_env);
+        let expanded =
+            expand_vars_for_host_with_target(&resolved, workspace_folder, &workspace_target);
+        cmd.arg("-e").arg(format!("{k}={expanded}"));
     }
 
     // Secrets resolved from local env (devcontainer spec: { "MY_SECRET": { "localEnv": "VAR" } })
@@ -568,10 +561,77 @@ pub fn create_and_start_container(
     Ok(())
 }
 
-fn port_value_to_string(p: &crate::config::PortValue) -> String {
+pub fn port_value_to_string(p: &crate::config::PortValue) -> String {
     match p {
         crate::config::PortValue::Number(n) => n.to_string(),
         crate::config::PortValue::Text(s) => s.clone(),
+    }
+}
+
+/// Validate a `forwardPorts`/`appPort` string form: a plain port or range,
+/// `host:container`, `ip:host:container`, bracketed IPv6 forms, an optional
+/// `/udp` or `/tcp` suffix, and service-host names like `db:5432`. Host-side
+/// ports may be `0` (random host port); container-side ports must be 1-65535.
+pub fn validate_port_spec(s: &str) -> std::result::Result<(), String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty port specification".to_string());
+    }
+    let s = s
+        .strip_suffix("/udp")
+        .or_else(|| s.strip_suffix("/tcp"))
+        .unwrap_or(s);
+
+    if s.starts_with('[') {
+        let Some(end) = s.find(']') else {
+            return Err("unterminated IPv6 address".to_string());
+        };
+        let rest = &s[end + 1..];
+        let parts: Vec<&str> = rest.split(':').filter(|p| !p.is_empty()).collect();
+        if parts.is_empty() || parts.len() > 2 {
+            return Err("invalid IPv6 port form".to_string());
+        }
+        for p in parts {
+            validate_container_port(p)?;
+        }
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        1 => validate_container_port(parts[0]),
+        2 => validate_container_port(parts[1]),
+        3 => {
+            validate_container_port(parts[1])?;
+            validate_container_port(parts[2])
+        }
+        _ => Err("too many ':' in port specification".to_string()),
+    }
+}
+
+fn validate_container_port(p: &str) -> std::result::Result<(), String> {
+    if let Some((a, b)) = p.split_once('-') {
+        let a: u16 = a
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid port or range"))?;
+        let b: u16 = b
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid port or range"))?;
+        if a == 0 || b == 0 {
+            return Err("port '0' is not valid on the container side".to_string());
+        }
+        if a > b {
+            return Err(format!("port range '{p}' is reversed"));
+        }
+        Ok(())
+    } else {
+        let n: u16 = p
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid port"))?;
+        if n == 0 {
+            return Err("port '0' is not valid on the container side".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -671,7 +731,7 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     // The explicit 0.0.0.0 works around rootless Docker 29 (slirp4netns)
     // failing to parse the bare "hostPort:containerPort" form.
     if !spec.contains(':') {
-        if is_port_or_range(spec) {
+        if is_port_or_range(spec) && spec != "0" {
             return Some(format!("0.0.0.0:{spec}:{spec}"));
         }
         return None;
@@ -683,7 +743,7 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     if rest.len() == 1 {
         let host_is_ip = is_ipv4(first);
         let host_is_number = is_port_or_range(first);
-        let container_ok = is_port_or_range(rest[0]);
+        let container_ok = is_port_or_range(rest[0]) && rest[0] != "0";
         if !container_ok {
             // empty or non-numeric container port ("8080:" / "8080:abc")
             return None;
@@ -693,7 +753,8 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
             return Some(format!("{spec}:{}", rest[0]));
         }
         if host_is_number {
-            // "8080:80" -> "0.0.0.0:8080:80" (also ranges "8080-8085:8080-8085")
+            // "8080:80" -> "0.0.0.0:8080:80" (also ranges "8080-8085:8080-8085"
+            // and random host ports "0:8080")
             return Some(format!("0.0.0.0:{spec}"));
         }
         // "db:5432" -> service host, cannot publish
@@ -702,7 +763,7 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     // "ip:host:container"
     if rest.len() == 2 {
         let ip_ok = is_ipv4(first);
-        if ip_ok && is_port_or_range(rest[0]) && is_port_or_range(rest[1]) {
+        if ip_ok && is_port_or_range(rest[0]) && is_port_or_range(rest[1]) && rest[1] != "0" {
             return Some(spec.to_string());
         }
     }
@@ -710,10 +771,9 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
 }
 
 fn is_port_or_range(s: &str) -> bool {
-    // Reject bare "0": docker interprets a 0 host port as a random port
-    if s == "0" {
-        return false;
-    }
+    // Allow "0" on the host side (docker interprets it as a random host port);
+    // container-side "0" is rejected by the callers via validate_port_spec and
+    // the `!= "0"` checks above.
     if s.parse::<u16>().is_ok() {
         return true;
     }
@@ -792,7 +852,7 @@ pub fn expand_vars_for_container(
     result
 }
 
-fn devcontainer_id_for(workspace_folder: &Path) -> String {
+pub(crate) fn devcontainer_id_for(workspace_folder: &Path) -> String {
     let ws_str = workspace_folder.to_string_lossy().to_string();
     let mut hash: u64 = 14695981039346656037;
     for b in ws_str.bytes() {
@@ -802,12 +862,39 @@ fn devcontainer_id_for(workspace_folder: &Path) -> String {
     format!("{hash:016x}")
 }
 
+/// Stable per-workspace compose project name, so workspaces with the same
+/// directory basename do not share compose projects/containers.
+pub fn compose_project_name(workspace_folder: &Path) -> String {
+    format!("bondar-{}", &devcontainer_id_for(workspace_folder)[..8])
+}
+
 fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
     if !input.contains("${devcontainerId}") {
         return input.to_string();
     }
     let id = devcontainer_id_for(workspace_folder);
     input.replace("${devcontainerId}", &id)
+}
+
+/// Resolve `${containerEnv:KEY}` references against the raw `containerEnv`
+/// entries (bounded recursion, cycle-safe). Unmatched or self-referential keys
+/// are left untouched and fall through to `expand_container_env_vars` (host env).
+pub fn resolve_container_env_value(input: &str, raw: &HashMap<String, String>) -> String {
+    let mut result = input.to_string();
+    for _ in 0..10 {
+        let mut changed = false;
+        for (k, v) in raw {
+            let pat = format!("${{containerEnv:{k}}}");
+            if result.contains(&pat) {
+                result = result.replace(&pat, v);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    result
 }
 
 /// Resolve `${containerEnv:KEY}` references against a host-side map (e.g. the
@@ -1142,10 +1229,70 @@ mod tests {
     fn test_is_port_or_range() {
         assert!(is_port_or_range("8080"));
         assert!(is_port_or_range("8080-8085"));
+        assert!(is_port_or_range("0"));
         assert!(!is_port_or_range("8080-"));
         assert!(!is_port_or_range("-8080"));
         assert!(!is_port_or_range("abc"));
         assert!(!is_port_or_range("8080-8085-8090"));
+    }
+
+    #[test]
+    fn test_validate_port_spec() {
+        assert!(validate_port_spec("8080").is_ok());
+        assert!(validate_port_spec("8080-8085").is_ok());
+        assert!(validate_port_spec("8080:80").is_ok());
+        assert!(validate_port_spec("127.0.0.1:9090").is_ok());
+        assert!(validate_port_spec("127.0.0.1:8080:80").is_ok());
+        assert!(validate_port_spec("[::1]:8080").is_ok());
+        assert!(validate_port_spec("[::1]:8080:80").is_ok());
+        assert!(validate_port_spec("db:5432").is_ok());
+        assert!(validate_port_spec("0:8080").is_ok());
+        assert!(validate_port_spec("8080/udp").is_ok());
+        assert!(validate_port_spec("8080-8085:8080-8085").is_ok());
+
+        assert!(validate_port_spec("").is_err());
+        assert!(validate_port_spec("0").is_err());
+        assert!(validate_port_spec("65536").is_err());
+        assert!(validate_port_spec("8080-").is_err());
+        assert!(validate_port_spec("8080:abc").is_err());
+        assert!(validate_port_spec("8080-8085-8090").is_err());
+        assert!(validate_port_spec("[::1]").is_err());
+        assert!(validate_port_spec("[::1]:0").is_err());
+    }
+
+    #[test]
+    fn test_resolve_container_env_value() {
+        let raw = HashMap::from([
+            ("A".to_string(), "x".to_string()),
+            ("B".to_string(), "${containerEnv:A}-y".to_string()),
+        ]);
+        assert_eq!(resolve_container_env_value("${containerEnv:A}", &raw), "x");
+        assert_eq!(
+            resolve_container_env_value("${containerEnv:B}", &raw),
+            "x-y"
+        );
+        // Self-reference is left untouched (falls through to host env)
+        assert_eq!(
+            resolve_container_env_value("${containerEnv:C}", &raw),
+            "${containerEnv:C}"
+        );
+        // Cycle is bounded, no hang
+        let cyclic = HashMap::from([
+            ("X".to_string(), "${containerEnv:Y}".to_string()),
+            ("Y".to_string(), "${containerEnv:X}".to_string()),
+        ]);
+        let _ = resolve_container_env_value("${containerEnv:X}", &cyclic);
+    }
+
+    #[test]
+    fn test_compose_project_name() {
+        let ws = std::path::Path::new("/home/user/proj");
+        let a = compose_project_name(ws);
+        let b = compose_project_name(ws);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 15);
+        let other = compose_project_name(std::path::Path::new("/home/user/other"));
+        assert_ne!(a, other);
     }
 
     #[test]
@@ -1341,10 +1488,15 @@ mod tests {
 
     #[test]
     fn test_publish_port_arg_zero() {
-        // Port 0 is rejected (docker would treat it as a random port)
+        // Container-side port 0 is rejected (docker would treat it as a random port)
         assert_eq!(publish_port_arg("0"), None);
         assert_eq!(publish_port_arg("0:0"), None);
         assert_eq!(publish_port_arg("8080:0"), None);
+        // Host-side 0 selects a random host port
+        assert_eq!(
+            publish_port_arg("0:8080"),
+            Some("0.0.0.0:0:8080".to_string())
+        );
     }
 
     #[test]
