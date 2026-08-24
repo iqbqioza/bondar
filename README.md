@@ -5,8 +5,8 @@
 </p>
 
 <p align="center">
-  [![CI](https://github.com/iqbqioza/bondar/actions/workflows/ci.yml/badge.svg)](https://github.com/iqbqioza/bondar/actions/workflows/ci.yml)
-  [![Release](https://github.com/iqbqioza/bondar/actions/workflows/release.yml/badge.svg)](https://github.com/iqbqioza/bondar/actions/workflows/release.yml)
+  <a href="https://github.com/iqbqioza/bondar/actions/workflows/ci.yml"><img src="https://github.com/iqbqioza/bondar/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/iqbqioza/bondar/actions/workflows/release.yml"><img src="https://github.com/iqbqioza/bondar/actions/workflows/release.yml/badge.svg" alt="Release"></a>
 </p>
 
 A standalone development container command, as an alternative to `devcontainer`.
