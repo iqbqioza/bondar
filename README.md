@@ -1,6 +1,20 @@
 # bondar
 
-A standalone development container command, as an alternative to `devcontainer`.
+<p align="center">
+  <img src="docs/images/bondar-small.png" alt="bondar logo" width="200">
+</p>
+
+<p align="center">
+  <a href="https://github.com/iqbqioza/bondar/actions/workflows/ci.yml"><img src="https://github.com/iqbqioza/bondar/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/iqbqioza/bondar/actions/workflows/release.yml"><img src="https://github.com/iqbqioza/bondar/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+</p>
+
+> [!NOTE]
+> This project is under active development and may contain bugs or unexpected behavior. We apologize for any inconvenience.
+
+A standalone development container command, as an alternative to the [Dev Container CLI (@devcontainers/cli)](https://github.com/devcontainers/cli).
+
+**Fun fact: "bondar" is an anagram of "danboru" (段ボール), the Japanese word for a cardboard box. It's basically a box — a pretty neat name, right?**
 
 - No dependency on Node.js, VSCode Server, or other Microsoft-related tools (single Rust binary)
 - Uses existing `.devcontainer/devcontainer.json` definitions as-is
