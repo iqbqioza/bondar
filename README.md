@@ -4,6 +4,11 @@
   <img src="docs/images/bondar-small.png" alt="bondar logo" width="200">
 </p>
 
+<p align="center">
+  [![CI](https://github.com/iqbqioza/bondar/actions/workflows/ci.yml/badge.svg)](https://github.com/iqbqioza/bondar/actions/workflows/ci.yml)
+  [![Release](https://github.com/iqbqioza/bondar/actions/workflows/release.yml/badge.svg)](https://github.com/iqbqioza/bondar/actions/workflows/release.yml)
+</p>
+
 A standalone development container command, as an alternative to `devcontainer`.
 
 - No dependency on Node.js, VSCode Server, or other Microsoft-related tools (single Rust binary)
