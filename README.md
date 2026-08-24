@@ -24,6 +24,10 @@ A standalone development container command, as an alternative to the [Dev Contai
 ## Install
 
 ```sh
+# Install the latest release binary (no sudo required)
+curl -fsSL https://raw.githubusercontent.com/iqbqioza/bondar/main/install.sh | sh
+
+# Or build from source
 cargo build --release
 # add target/release/bondar to your PATH
 ```
