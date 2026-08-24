@@ -1077,13 +1077,17 @@ pub fn expand_container_env_from_map(
     result
 }
 
-fn expand_container_env_vars(input: &str) -> String {
+/// Expand `${PREFIX:VAR[:default]}` references from the host environment.
+/// Unmatched references are left untouched. Both `localEnv` and `containerEnv`
+/// use the same semantics; `containerEnv` refs fall back to the host only when
+/// the container-side value is unknown (documented deviation).
+fn expand_env_vars(input: &str, prefix: &str) -> String {
     let mut result = String::new();
     let mut chars = input.chars().peekable();
 
     while let Some(c) = chars.next() {
         if c == '$' && chars.peek() == Some(&'{') {
-            chars.next();
+            chars.next(); // consume '{'
             let mut var_content = String::new();
             let mut found_end = false;
             for nc in chars.by_ref() {
@@ -1093,8 +1097,9 @@ fn expand_container_env_vars(input: &str) -> String {
                 }
                 var_content.push(nc);
             }
-            if found_end && var_content.starts_with("containerEnv:") {
-                let rest = &var_content["containerEnv:".len()..];
+            let tag = format!("{prefix}:");
+            if found_end && var_content.starts_with(&tag) {
+                let rest = &var_content[tag.len()..];
                 let (var_name, default_val) = if let Some(colon_pos) = rest.find(':') {
                     (&rest[..colon_pos], Some(&rest[colon_pos + 1..]))
                 } else {
@@ -1102,7 +1107,7 @@ fn expand_container_env_vars(input: &str) -> String {
                 };
                 if var_name.is_empty() {
                     eprintln!(
-                        "Warning: '${{containerEnv:}}' has an empty variable name, resolved to empty"
+                        "Warning: '${{{prefix}:}}' has an empty variable name, resolved to empty"
                     );
                 }
                 let env_val = std::env::var(var_name)
@@ -1124,51 +1129,12 @@ fn expand_container_env_vars(input: &str) -> String {
     result
 }
 
+fn expand_container_env_vars(input: &str) -> String {
+    expand_env_vars(input, "containerEnv")
+}
+
 fn expand_local_env_vars(input: &str) -> String {
-    let mut result = String::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '$' && chars.peek() == Some(&'{') {
-            chars.next(); // consume '{'
-            let mut var_content = String::new();
-            let mut found_end = false;
-            for nc in chars.by_ref() {
-                if nc == '}' {
-                    found_end = true;
-                    break;
-                }
-                var_content.push(nc);
-            }
-            if found_end && var_content.starts_with("localEnv:") {
-                let rest = &var_content["localEnv:".len()..];
-                let (var_name, default_val) = if let Some(colon_pos) = rest.find(':') {
-                    (&rest[..colon_pos], Some(&rest[colon_pos + 1..]))
-                } else {
-                    (rest, None)
-                };
-                if var_name.is_empty() {
-                    eprintln!(
-                        "Warning: '${{localEnv:}}' has an empty variable name, resolved to empty"
-                    );
-                }
-                let env_val = std::env::var(var_name)
-                    .unwrap_or_else(|_| default_val.unwrap_or("").to_string());
-                result.push_str(&env_val);
-            } else if found_end {
-                result.push_str("${");
-                result.push_str(&var_content);
-                result.push('}');
-            } else {
-                result.push_str("${");
-                result.push_str(&var_content);
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
+    expand_env_vars(input, "localEnv")
 }
 
 pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
