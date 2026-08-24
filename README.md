@@ -9,7 +9,7 @@
   <a href="https://github.com/iqbqioza/bondar/actions/workflows/release.yml"><img src="https://github.com/iqbqioza/bondar/actions/workflows/release.yml/badge.svg" alt="Release"></a>
 </p>
 
-> [!INFO]
+> [!NOTE]
 > This project is under active development and may contain bugs or unexpected behavior. We apologize for any inconvenience.
 
 A standalone development container command, as an alternative to `devcontainer`.
