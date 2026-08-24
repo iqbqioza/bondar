@@ -19,6 +19,8 @@ pub fn run(
     if cfg.docker_compose_file.is_some() {
         let mut cmd = Command::new("docker");
         cmd.arg("compose");
+        cmd.arg("--project-name")
+            .arg(crate::docker::compose_project_name(&ws));
         for arg in crate::compose::compose_files_args_for_build(&cfg, &cfg_path, &ws)? {
             cmd.arg(arg);
         }
@@ -27,7 +29,7 @@ pub fn run(
             cmd.arg("-f");
         }
         if let Some(t) = &tail
-            && t.parse::<usize>().is_ok()
+            && (t == "all" || t.parse::<usize>().is_ok())
         {
             cmd.arg("--tail").arg(t);
         } else if let Some(t) = &tail {
@@ -55,6 +57,7 @@ pub fn run(
             "Container {container_name} does not exist"
         )));
     }
+    docker::ensure_container_matches_workspace(&container_name, &ws)?;
 
     let mut cmd = Command::new("docker");
     cmd.arg("logs");
@@ -62,7 +65,7 @@ pub fn run(
         cmd.arg("-f");
     }
     if let Some(t) = &tail
-        && t.parse::<usize>().is_ok()
+        && (t == "all" || t.parse::<usize>().is_ok())
     {
         cmd.arg("--tail").arg(t);
     } else if let Some(t) = &tail {

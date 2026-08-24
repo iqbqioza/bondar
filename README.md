@@ -74,6 +74,6 @@ cargo test
 ```
 
 A verification workspace is available under `sample/`. Note that
-`sample/.devcontainer/devcontainer.json` sets `remoteUser: "vscode"`, which is
-not present in the base Ubuntu image; bondar creates the user automatically via
+`sample/.devcontainer/devcontainer.json` sets `remoteUser: "vscode"`; when that
+user is not present in the image, bondar creates it automatically via
 `updateRemoteUserUID` (the `useradd` fallback) during `bondar up`.

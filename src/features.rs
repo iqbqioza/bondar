@@ -93,8 +93,11 @@ pub fn handle_features_with_container(
                 install_feature(id, opts, container_name, container_user)?;
             }
         }
-        for (id, opts) in feat_map {
-            if !order.contains(id) {
+        let mut remaining: Vec<&String> =
+            feat_map.keys().filter(|id| !order.contains(*id)).collect();
+        remaining.sort();
+        for id in remaining {
+            if let Some(opts) = feat_map.get(id) {
                 install_feature(id, opts, container_name, container_user)?;
             }
         }
@@ -208,13 +211,11 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
 
     if has_oras {
         println!("  Using 'oras' to fetch OCI artifact");
+        let dest_str = dest_dir.to_str().ok_or_else(|| {
+            BondarError::Config("Feature cache path is not valid UTF-8".to_string())
+        })?;
         let (ok, stderr) = run_output(
-            std::process::Command::new("oras").args([
-                "pull",
-                id,
-                "--output",
-                dest_dir.to_str().unwrap_or("/tmp"),
-            ]),
+            std::process::Command::new("oras").args(["pull", id, "--output", dest_str]),
             &format!("oras pull {id}"),
         )?;
         if ok {
@@ -223,19 +224,61 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
             return Ok(());
         }
         eprintln!("  Warning: oras pull failed: {stderr}");
-        return Err(BondarError::Docker(format!("oras pull failed for {id}")));
+        // Fall through to the docker pull fallback
     }
 
-    // Fallback: docker pull (works for features that are also container images)
-    let feature_image = id.split(':').next().unwrap_or(id);
+    // Fallback: docker pull (works for features that are also container images).
+    // Feature IDs are valid image references (e.g. ghcr.io/devcontainers/features/common-utils:2),
+    // so the full ID is used to keep the requested tag/version.
+    let feature_image = id;
     println!("  Trying 'docker pull {feature_image}' as fallback");
     let (ok, stderr) = run_output(
         std::process::Command::new("docker").args(["pull", feature_image]),
         "docker pull",
     )?;
     if ok {
-        println!("  Pulled feature image {feature_image}");
-        Ok(())
+        println!("  Pulled feature image {feature_image}; extracting feature files...");
+        let id_suffix: String = sanitize_id(id).chars().take(64).collect();
+        let tmp_name = format!("bondar-feature-extract-{}-{id_suffix}", std::process::id());
+        let dest_str = dest_dir.to_str().ok_or_else(|| {
+            BondarError::Config("Feature cache path is not valid UTF-8".to_string())
+        })?;
+        let created = std::process::Command::new("docker")
+            .args(["create", "--name", &tmp_name, feature_image])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        // Feature images typically carry /install.sh at the root; copy only
+        // that file instead of the whole root filesystem (which may include
+        // mount points that docker cp cannot handle).
+        let cp_install = created
+            && std::process::Command::new("docker")
+                .args(["cp", &format!("{tmp_name}:/install.sh"), dest_str])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        let extracted = if cp_install {
+            true
+        } else {
+            created
+                && std::process::Command::new("docker")
+                    .args(["cp", &format!("{tmp_name}:/"), dest_str])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+        };
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &tmp_name])
+            .status();
+        if extracted {
+            println!("  Extracted feature files from image");
+            ensure_extracted(dest_dir);
+            return Ok(());
+        }
+        eprintln!("  Warning: could not extract feature files from pulled image");
+        Err(BondarError::Docker(format!(
+            "Unable to fetch feature {id} (no oras, docker pull extraction failed)"
+        )))
     } else {
         eprintln!(
             "  Note: docker pull failed for {feature_image}: {}",
@@ -261,7 +304,45 @@ fn ensure_extracted(dest_dir: &Path) {
         let Some(name) = entry.file_name().to_str().map(String::from) else {
             continue;
         };
-        if name.ends_with(".tar.gz") || name.ends_with(".tgz") || name.ends_with(".tar") {
+        let lower_name = name.to_lowercase();
+        if lower_name.ends_with(".tar.gz")
+            || lower_name.ends_with(".tgz")
+            || lower_name.ends_with(".tar")
+        {
+            // Guard against path traversal / absolute paths in the archive
+            if let Ok(list) = std::process::Command::new("tar")
+                .arg("-tf")
+                .arg(&path)
+                .output()
+            {
+                let listing = String::from_utf8_lossy(&list.stdout);
+                if listing
+                    .lines()
+                    .any(|l| l.starts_with('/') || l.split('/').any(|c| c == ".."))
+                {
+                    eprintln!(
+                        "  Warning: archive {name} contains unsafe paths; skipping expansion"
+                    );
+                    continue;
+                }
+            }
+            // Reject archives containing symlinks (they can escape dest_dir)
+            if let Ok(list) = std::process::Command::new("tar")
+                .arg("-tvf")
+                .arg(&path)
+                .output()
+            {
+                let listing = String::from_utf8_lossy(&list.stdout);
+                if listing.lines().any(|l| {
+                    l.split_whitespace()
+                        .next()
+                        .map(|mode| mode.starts_with('l'))
+                        .unwrap_or(false)
+                }) {
+                    eprintln!("  Warning: archive {name} contains symlinks; skipping expansion");
+                    continue;
+                }
+            }
             println!("  Expanding archive {name}...");
             let status = std::process::Command::new("tar")
                 .arg("-xf")
@@ -307,10 +388,13 @@ fn copy_feature_into_container(
         eprintln!("  Warning: mkdir failed: {stderr}");
     }
 
+    let host_str = host_dir
+        .to_str()
+        .ok_or_else(|| BondarError::Config("Feature cache path is not valid UTF-8".to_string()))?;
     let (ok, stderr) = run_output(
         std::process::Command::new("docker").args([
             "cp",
-            host_dir.to_str().unwrap_or(""),
+            host_str,
             &format!("{container}:{container_path}/"),
         ]),
         "docker cp",
@@ -360,13 +444,9 @@ fn install_in_container(
             .arg(format!("_CONTAINER_USER_HOME={home}"));
         exec_cmd.arg("-e").arg(format!("_REMOTE_USER_HOME={home}"));
     }
-    exec_cmd.arg(container);
-    // Normalize CRLF line endings so install.sh does not fail with
-    // "not found" when the file has Windows line endings.
-    exec_cmd.arg("sh").arg("-c").arg(format!(
-        "cd {container_path} && (sed -i 's/\\r$//' install.sh 2>/dev/null || tr -d '\\r' < install.sh > install.sh.tmp && mv install.sh.tmp install.sh 2>/dev/null || true) && chmod +x install.sh && ./install.sh"
-    ));
-    // Pass feature options as environment variables
+    // Pass feature options as environment variables. NOTE: all `-e` flags must
+    // come before the container name; `docker exec [OPTIONS] CONTAINER ...`
+    // treats everything after the container name as the command.
     if let serde_json::Value::Object(map) = opts {
         for (k, v) in map {
             // `installsAfter` is metadata consumed by bondar, not an
@@ -386,12 +466,30 @@ fn install_in_container(
             exec_cmd.arg("-e").arg(format!("{k}={value}"));
         }
     }
+    exec_cmd.arg(container);
+    // Normalize CRLF line endings so install.sh does not fail with
+    // "not found" when the file has Windows line endings.
+    exec_cmd.arg("sh").arg("-c").arg(format!(
+        "cd {container_path} && (sed -i 's/\\r$//' install.sh 2>/dev/null || tr -d '\\r' < install.sh > install.sh.tmp && mv install.sh.tmp install.sh 2>/dev/null || true) && chmod +x install.sh && ./install.sh"
+    ));
 
     let (ok, stderr) = run_output(&mut exec_cmd, "install.sh")?;
     if ok {
         println!("  Feature {id} installed successfully");
     } else {
-        eprintln!("  Warning: install.sh failed for {id}: {stderr}");
+        let _ = run_output(
+            std::process::Command::new("docker").args([
+                "exec",
+                container,
+                "sh",
+                "-c",
+                &format!("rm -rf {container_path}"),
+            ]),
+            "cleanup",
+        );
+        return Err(BondarError::Docker(format!(
+            "install.sh failed for {id}: {stderr}"
+        )));
     }
 
     // Cleanup the copied files inside the container
@@ -424,19 +522,23 @@ fn read_feature_metadata(dir: &Path) -> Option<serde_json::Value> {
 
 /// Resolve the user's home directory inside the container via `getent passwd`,
 /// falling back to `/home/{user}` when unavailable (e.g. no getent).
+/// The user is passed as a separate argument (no shell interpolation).
 fn resolve_user_home(container: &str, user: &str) -> String {
     std::process::Command::new("docker")
-        .args([
-            "exec",
-            container,
-            "sh",
-            "-c",
-            &format!("getent passwd {user} | cut -d: -f6"),
-        ])
+        .args(["exec", container, "getent", "passwd", user])
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .split(':')
+                .nth(5)
+                .unwrap_or("")
+                .to_string()
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("/home/{user}"))
 }
@@ -451,6 +553,11 @@ fn install_feature(
         eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
         return Ok(());
     }
+    if !opts.is_object() && !opts.is_null() {
+        eprintln!(
+            "Warning: feature '{id}' options must be an object, got {opts}; ignoring options"
+        );
+    }
 
     println!("Attempting to install feature '{id}' with opts {opts}...");
 
@@ -460,10 +567,9 @@ fn install_feature(
         return Ok(());
     }
     if let Err(e) = fetch_feature(id, &dest_dir) {
-        eprintln!("  Warning: could not fetch feature {id}: {e}");
         // Avoid stale metadata from a previous failed/partial fetch
         let _ = std::fs::remove_dir_all(&dest_dir);
-        return Ok(());
+        return Err(e);
     }
 
     // Read devcontainer-features.json metadata for installsAfter dependencies

@@ -28,10 +28,17 @@ pub struct ContainerExec<'a> {
     pub workdir: &'a str,
     pub workspace_folder: &'a Path,
     pub env: Option<&'a HashMap<String, String>>,
+    pub container_env: Option<&'a HashMap<String, String>>,
 }
 
-pub fn execute_host_lifecycle(value: &serde_json::Value, workspace_folder: &Path) -> Result<()> {
-    execute_value_with_env(value, workspace_folder, None, None)
+/// Host lifecycle with an explicit container workspace folder, so
+/// `${containerWorkspaceFolder}` expands to the configured value.
+pub fn execute_host_lifecycle_with_target(
+    value: &serde_json::Value,
+    workspace_folder: &Path,
+    container_workspace: &str,
+) -> Result<()> {
+    execute_value_with_env(value, workspace_folder, container_workspace, None)
 }
 
 pub fn execute_container_lifecycle_with_env(
@@ -41,6 +48,7 @@ pub fn execute_container_lifecycle_with_env(
     workdir: &str,
     workspace_folder: &Path,
     env: Option<&HashMap<String, String>>,
+    container_env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     let exec = ContainerExec {
         container_name,
@@ -48,28 +56,41 @@ pub fn execute_container_lifecycle_with_env(
         workdir,
         workspace_folder,
         env,
+        container_env,
     };
-    execute_value_with_env(value, workspace_folder, Some(&exec), None)
+    execute_value_with_env(value, workspace_folder, workdir, Some(&exec))
 }
 
 fn execute_value_with_env(
     value: &serde_json::Value,
     workspace_folder: &Path,
+    container_workspace: &str,
     container: Option<&ContainerExec<'_>>,
-    _label: Option<&str>,
 ) -> Result<()> {
     match value {
         serde_json::Value::String(s) => {
-            execute_single_command_with_env(s, &[], true, workspace_folder, container)?;
+            execute_single_command_with_env(
+                s,
+                &[],
+                true,
+                workspace_folder,
+                container_workspace,
+                container,
+            )?;
         }
         serde_json::Value::Array(arr) => {
             if arr.is_empty() {
                 return Ok(());
             }
-            let parts: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
+            let mut parts: Vec<String> = Vec::new();
+            for v in arr {
+                match v.as_str() {
+                    Some(s) => parts.push(String::from(s)),
+                    None => eprintln!(
+                        "Warning: lifecycle array contains a non-string element {v}; ignoring it"
+                    ),
+                }
+            }
             if parts.is_empty() {
                 return Err(BondarError::Config(
                     "Invalid lifecycle array command".to_string(),
@@ -77,12 +98,20 @@ fn execute_value_with_env(
             }
             let cmd = &parts[0];
             let args: Vec<&str> = parts[1..].iter().map(String::as_str).collect();
-            execute_single_command_with_env(cmd, &args, false, workspace_folder, container)?;
+            execute_single_command_with_env(
+                cmd,
+                &args,
+                false,
+                workspace_folder,
+                container_workspace,
+                container,
+            )?;
         }
         serde_json::Value::Object(map) => {
+            // serde_json preserves declaration order (preserve_order feature)
             for (key, cmd_val) in map {
                 println!("Running lifecycle '{key}'...");
-                execute_value_with_env(cmd_val, workspace_folder, container, Some(key))?;
+                execute_value_with_env(cmd_val, workspace_folder, container_workspace, container)?;
             }
         }
         serde_json::Value::Null => {}
@@ -100,12 +129,13 @@ fn execute_single_command_with_env(
     args: &[&str],
     use_shell: bool,
     workspace_folder: &Path,
+    container_workspace: &str,
     container: Option<&ContainerExec<'_>>,
 ) -> Result<()> {
     if let Some(exec) = container {
         execute_in_container_with_env(cmd, args, use_shell, exec)
     } else {
-        execute_on_host(cmd, args, use_shell, workspace_folder)
+        execute_on_host(cmd, args, use_shell, workspace_folder, container_workspace)
     }
 }
 
@@ -114,11 +144,19 @@ fn execute_on_host(
     args: &[&str],
     use_shell: bool,
     workspace_folder: &Path,
+    container_workspace: &str,
 ) -> Result<()> {
-    let expanded_cmd = crate::docker::expand_vars_for_host(cmd, workspace_folder);
+    let expanded_cmd =
+        crate::docker::expand_vars_for_host_with_target(cmd, workspace_folder, container_workspace);
     let expanded_args: Vec<String> = args
         .iter()
-        .map(|a| crate::docker::expand_vars_for_host(a, workspace_folder))
+        .map(|a| {
+            crate::docker::expand_vars_for_host_with_target(
+                a,
+                workspace_folder,
+                container_workspace,
+            )
+        })
         .collect();
 
     println!(
@@ -194,6 +232,7 @@ pub fn spawn_container_lifecycle(
     workdir: &str,
     workspace_folder: &Path,
     env: Option<&HashMap<String, String>>,
+    container_env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     let exec = ContainerExec {
         container_name,
@@ -201,6 +240,7 @@ pub fn spawn_container_lifecycle(
         workdir,
         workspace_folder,
         env,
+        container_env,
     };
     spawn_container_value(value, &exec)
 }
@@ -214,10 +254,15 @@ fn spawn_container_value(value: &serde_json::Value, exec: &ContainerExec<'_>) ->
             if arr.is_empty() {
                 return Ok(());
             }
-            let parts: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
+            let mut parts: Vec<String> = Vec::new();
+            for v in arr {
+                match v.as_str() {
+                    Some(s) => parts.push(String::from(s)),
+                    None => eprintln!(
+                        "Warning: lifecycle array contains a non-string element {v}; ignoring it"
+                    ),
+                }
+            }
             if parts.is_empty() {
                 return Err(BondarError::Config(
                     "Invalid lifecycle array command".to_string(),
@@ -292,7 +337,18 @@ fn build_container_command(
 
     if let Some(env_map) = exec.env {
         for (k, v) in env_map {
-            docker_cmd.arg("-e").arg(format!("{k}={v}"));
+            // Resolve ${containerEnv:KEY} references against the containerEnv map
+            let from_map = if let Some(ce) = exec.container_env {
+                crate::docker::expand_container_env_from_map(v, ce, None)
+            } else {
+                v.clone()
+            };
+            let expanded_v = crate::docker::expand_vars_for_container(
+                &from_map,
+                exec.workspace_folder,
+                exec.workdir,
+            );
+            docker_cmd.arg("-e").arg(format!("{k}={expanded_v}"));
         }
     }
 
@@ -315,22 +371,46 @@ fn build_container_command(
 
 pub fn lifecycle_summary(config: &crate::config::DevContainerConfig) -> Vec<String> {
     let mut cmds = Vec::new();
-    if config.initialize_command.is_some() {
+    if config
+        .initialize_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("initializeCommand".to_string());
     }
-    if config.on_create_command.is_some() {
+    if config
+        .on_create_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("onCreateCommand".to_string());
     }
-    if config.update_content_command.is_some() {
+    if config
+        .update_content_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("updateContentCommand".to_string());
     }
-    if config.post_create_command.is_some() {
+    if config
+        .post_create_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("postCreateCommand".to_string());
     }
-    if config.post_start_command.is_some() {
+    if config
+        .post_start_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("postStartCommand".to_string());
     }
-    if config.post_attach_command.is_some() {
+    if config
+        .post_attach_command
+        .as_ref()
+        .is_some_and(|v| !v.is_null())
+    {
         cmds.push("postAttachCommand".to_string());
     }
     cmds
@@ -396,9 +476,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&ws);
         std::fs::create_dir_all(&ws).unwrap();
 
-        assert!(execute_host_lifecycle(&json!("echo hello"), &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(&json!("echo hello"), &ws, "/workspace").is_ok()
+        );
         // Failure propagates
-        assert!(execute_host_lifecycle(&json!("exit 1"), &ws).is_err());
+        assert!(execute_host_lifecycle_with_target(&json!("exit 1"), &ws, "/workspace").is_err());
 
         let _ = std::fs::remove_dir_all(&ws);
     }
@@ -410,17 +492,35 @@ mod tests {
         std::fs::create_dir_all(&ws).unwrap();
 
         // Array
-        assert!(execute_host_lifecycle(&json!(["echo", "hi"]), &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(&json!(["echo", "hi"]), &ws, "/workspace").is_ok()
+        );
         // Empty array
-        assert!(execute_host_lifecycle(&serde_json::json!([]), &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(&serde_json::json!([]), &ws, "/workspace").is_ok()
+        );
         // Object (sequential keys)
-        assert!(execute_host_lifecycle(&json!({"a": "echo a", "b": ["echo", "b"]}), &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(
+                &json!({"a": "echo a", "b": ["echo", "b"]}),
+                &ws,
+                "/workspace"
+            )
+            .is_ok()
+        );
         // Null
-        assert!(execute_host_lifecycle(&serde_json::Value::Null, &ws).is_ok());
+        assert!(
+            execute_host_lifecycle_with_target(&serde_json::Value::Null, &ws, "/workspace").is_ok()
+        );
         // Invalid type
-        assert!(execute_host_lifecycle(&serde_json::json!(123), &ws).is_err());
+        assert!(
+            execute_host_lifecycle_with_target(&serde_json::json!(123), &ws, "/workspace").is_err()
+        );
         // Non-string array elements
-        assert!(execute_host_lifecycle(&serde_json::json!([123, 456]), &ws).is_err());
+        assert!(
+            execute_host_lifecycle_with_target(&serde_json::json!([123, 456]), &ws, "/workspace")
+                .is_err()
+        );
 
         let _ = std::fs::remove_dir_all(&ws);
     }

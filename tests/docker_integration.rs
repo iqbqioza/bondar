@@ -3,6 +3,17 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_bondar");
 
+/// Same FNV-1a hash bondar uses for the per-workspace compose project name.
+fn project_name_for(ws: &std::path::Path) -> String {
+    let ws_str = ws.to_string_lossy().to_string();
+    let mut hash: u64 = 14695981039346656037;
+    for b in ws_str.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    format!("bondar-{}", &format!("{hash:016x}")[..8])
+}
+
 fn docker_available() -> bool {
     Command::new("docker")
         .arg("version")
@@ -126,7 +137,7 @@ fn test_build_roundtrip() {
     let down = bondar(&["down", "--workspace-folder", ws_str]);
     assert!(down.status.success());
     let _ = Command::new("docker")
-        .args(["rmi", "bondar-int-build"])
+        .args(["rmi", "-f", "bondar-int-build"])
         .output();
 
     cleanup(&ws);
@@ -320,21 +331,24 @@ fn test_wait_for_background() {
     );
     assert!(String::from_utf8_lossy(&up.stdout).contains("in background"));
 
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    let exec = bondar(&[
-        "exec",
-        "--workspace-folder",
-        ws_str,
-        "--",
-        "cat",
-        "/tmp/oc.txt",
-    ]);
-    assert!(
-        exec.status.success(),
-        "background onCreate did not run: {}",
-        String::from_utf8_lossy(&exec.stderr)
-    );
-    assert!(String::from_utf8_lossy(&exec.stdout).contains("created"));
+    // Poll instead of a fixed sleep so slow CI does not flake
+    let mut ok = false;
+    for _ in 0..50 {
+        let exec = bondar(&[
+            "exec",
+            "--workspace-folder",
+            ws_str,
+            "--",
+            "cat",
+            "/tmp/oc.txt",
+        ]);
+        if exec.status.success() && String::from_utf8_lossy(&exec.stdout).contains("created") {
+            ok = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    assert!(ok, "background onCreate did not run in time");
 
     let down = bondar(&["down", "--workspace-folder", ws_str]);
     assert!(down.status.success());
@@ -459,10 +473,11 @@ fn test_compose_stop_action() {
     );
     assert!(String::from_utf8_lossy(&down.stdout).contains("compose stop"));
 
-    // Cleanup leftover compose project
+    // Cleanup leftover compose project (same project name bondar uses)
     let ws_str = ws.join("docker-compose.yml").to_str().unwrap().to_string();
+    let project = project_name_for(&ws);
     let _ = Command::new("docker")
-        .args(["compose", "-f", &ws_str, "down"])
+        .args(["compose", "--project-name", &project, "-f", &ws_str, "down"])
         .current_dir(&ws)
         .output();
     cleanup(&ws);
@@ -527,9 +542,120 @@ fn test_build_no_cache() {
     );
 
     let _ = Command::new("docker")
-        .args(["rmi", "bondar-int-nocache"])
+        .args(["rmi", "-f", "bondar-int-nocache"])
         .output();
     cleanup(&ws);
+}
+
+#[test]
+fn test_compose_run_services_includes_primary() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-runsvc");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n    volumes:\n      - .:/workspace\n  db:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-runsvc", "dockerComposeFile": "../docker-compose.yml", "service": "app", "runServices": ["db"], "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "compose up with runServices failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    // The primary service must be running even though runServices only lists "db"
+    let exec = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--",
+        "sh",
+        "-c",
+        "echo primary-ok",
+    ]);
+    assert!(
+        exec.status.success(),
+        "primary service did not start: {}",
+        String::from_utf8_lossy(&exec.stderr)
+    );
+    assert!(String::from_utf8_lossy(&exec.stdout).contains("primary-ok"));
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
+
+#[test]
+fn test_same_basename_workspace_isolation() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    // Two workspaces with the same basename must never share containers
+    let base_a = std::env::temp_dir().join("bondar-int-collide-a");
+    let base_b = std::env::temp_dir().join("bondar-int-collide-b");
+    let _ = std::fs::remove_dir_all(&base_a);
+    let _ = std::fs::remove_dir_all(&base_b);
+    std::fs::create_dir_all(&base_a).unwrap();
+    std::fs::create_dir_all(&base_b).unwrap();
+    let ws_a = base_a.join("collide");
+    let ws_b = base_b.join("collide");
+    for ws in [&ws_a, &ws_b] {
+        std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+        std::fs::write(
+            ws.join(".devcontainer/devcontainer.json"),
+            r#"{"name": "collide", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+        )
+        .unwrap();
+    }
+
+    let up_a = bondar(&["up", "--workspace-folder", ws_a.to_str().unwrap()]);
+    assert!(up_a.status.success(), "first up failed");
+
+    // up on the second workspace must refuse to touch the first one's container
+    let up_b = bondar(&["up", "--workspace-folder", ws_b.to_str().unwrap()]);
+    assert!(
+        !up_b.status.success(),
+        "second up must fail on a name collision"
+    );
+    assert!(String::from_utf8_lossy(&up_b.stderr).contains("already exists for workspace"));
+
+    // down on the second workspace must not remove the first one's container
+    let down_b = bondar(&["down", "--workspace-folder", ws_b.to_str().unwrap()]);
+    assert!(
+        !down_b.status.success(),
+        "second down must fail on a name collision"
+    );
+
+    // The first workspace's container is still there and usable
+    let exec_a = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_a.to_str().unwrap(),
+        "--",
+        "sh",
+        "-c",
+        "echo intact",
+    ]);
+    assert!(exec_a.status.success());
+    assert!(String::from_utf8_lossy(&exec_a.stdout).contains("intact"));
+
+    let down_a = bondar(&["down", "--workspace-folder", ws_a.to_str().unwrap()]);
+    assert!(down_a.status.success());
+    let _ = std::fs::remove_dir_all(&base_a);
+    let _ = std::fs::remove_dir_all(&base_b);
 }
 
 #[test]

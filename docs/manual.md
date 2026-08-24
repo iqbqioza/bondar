@@ -106,7 +106,7 @@ bondar logs [--follow] [--tail <LINES>]
 ```
 
 - `--follow`: follows the log output (`docker logs -f` / `docker compose logs -f`).
-- `--tail <LINES>`: shows only the last N lines (numeric values only).
+- `--tail <LINES>`: shows only the last N lines, or `all` (numeric values or `all`).
 
 ### `bondar read-configuration`
 
@@ -119,7 +119,7 @@ bondar read-configuration [--include-merged-configuration]
 - Prints the resolved configuration (typed fields plus unknown/custom fields).
 - Validates against `devContainer.base.schema.json` (bundled).
 - Exits with code 1 when the configuration is invalid.
-- `--include-merged-configuration`: also prints a merged view (expanded env, secrets, ports, container name, defaults).
+- `--include-merged-configuration`: also prints a merged view (expanded env, secret *names* — values are never printed, container name, defaults).
 
 ## Configuration reference
 
@@ -154,6 +154,8 @@ Constraints enforced by validation:
 - `workspaceMount` requires `workspaceFolder`.
 - Empty strings are rejected for `name`, `image`, `service`, `workspaceFolder`, `build.dockerfile`, `dockerComposeFile`.
 - `containerEnv`/`remoteEnv` keys must not be empty.
+- Object-form `mounts` entries must specify `type` and `target`.
+- `forwardPorts`/`appPort` string forms are validated (port numbers, ranges, `host:container`, IPv6 brackets, `/udp`/`/tcp`).
 
 ### Environment variables
 
@@ -174,10 +176,10 @@ Supported variable expansion:
 | `${containerWorkspaceFolder}` | Container-side workspace path (`workspaceFolder`) |
 | `${containerWorkspaceFolderBasename}` | Base name of the container workspace path |
 | `${localEnv:VAR[:default]}` | Value of the host environment variable |
-| `${containerEnv:VAR[:default]}` | Value of the environment variable (resolved from host before container start) |
+| `${containerEnv:VAR[:default]}` | Value of the environment variable (resolved from `containerEnv` when set, otherwise from the host) |
 | `${devcontainerId}` | Stable identifier derived from the workspace path |
 
-`secrets` supports the `{"localEnv": "VAR"}` form. The file-path string form is warned and skipped.
+`secrets` supports the `{"localEnv": "VAR"}` form. The file-path string form is warned and skipped. Both the JSON Schema validation in `read-configuration` and bondar itself accept the `localEnv` form.
 
 ### Mounts
 
@@ -209,6 +211,7 @@ Supported variable expansion:
 - IPv6 addresses use bracket form (`[::1]:8080`).
 - `/udp` suffix and `portsAttributes` `protocol: "udp"` are honored.
 - `portsAttributes`/`otherPortsAttributes` `onAutoForward: "ignore"` disables publishing.
+- `portsAttributes` keys are matched against the *container port number* (or range). Regex keys (e.g. `.+/server.js`) cannot be evaluated at publish time and are ignored, since bondar has no running process list.
 
 ### Lifecycle scripts
 
@@ -224,12 +227,14 @@ Supported variable expansion:
 }
 ```
 
-- String values run through the shell (`sh -c` on Unix, `cmd /C` on Windows).
+- String values run through the shell (`sh -c` on Unix, `cmd /C` on Windows); the whole string is one shell command line.
 - Array values run directly without a shell.
 - Object values run each key sequentially (in declaration order).
 - `initializeCommand` runs on the host; the others run inside the container.
 - `waitFor` accepts `initializeCommand`, `onCreateCommand`, `updateContentCommand`, `postCreateCommand`, `postStartCommand`; scripts after the selected one run in the background.
 - Script failures stop subsequent scripts.
+
+Note: the devcontainer spec defaults `waitFor` to `updateContentCommand` (so later scripts run in the background while an editor starts). bondar runs all lifecycle scripts synchronously unless `waitFor` is set, since a terminal CLI has no UI to start.
 
 ### Features
 
@@ -244,7 +249,7 @@ Supported variable expansion:
 
 - Features are fetched with `oras` (or `docker pull` as a fallback), extracted if needed, copied into the container, and executed via `install.sh` as root.
 - Options are passed as environment variables to `install.sh` (`installsAfter` is excluded).
-- `installsAfter` (from the feature metadata or options) orders independent features; unknown dependencies are warned.
+- `installsAfter` declared in the `devcontainer.json` feature entry orders independent features; unknown dependencies are warned. The `installsAfter` value found in a feature's own metadata is reported but does not reorder already-determined install steps.
 - Features are installed only when the container is created, not on restart.
 - `customizations` declared by features are merged and stored as a container label.
 
@@ -261,9 +266,10 @@ Supported variable expansion:
 ```
 
 - `dockerComposeFile` may be a string or an array; paths are relative to `devcontainer.json`, and `${localWorkspaceFolder}` expands to the workspace root.
-- `runServices` limits the services started.
+- `runServices` starts additional services on top of the primary `service`, which is always started.
 - `containerEnv`, `secrets`, `forwardPorts`, `appPort` and `mounts` are injected via a generated `compose.override.yml` (in the OS temp directory).
 - `--remove-existing-container` passes `--force-recreate`; `--no-build` passes `--no-build`.
+- Each workspace gets a stable per-workspace compose project name (`bondar-<hash>`), so workspaces with the same directory name never share containers, networks or override files.
 
 ### Host requirements
 
@@ -295,6 +301,11 @@ Warnings are emitted when the host does not satisfy the requirements (not enforc
 - `exec`/`shell` propagate the container command exit code.
 - `read-configuration` exits with code 1 when the configuration is invalid.
 - All other errors exit with code 1.
+
+## Workspace isolation
+
+- The container name is derived from `name` (or the workspace directory basename). Two workspaces sharing the same basename would collide on `bondar-{basename}`; bondar verifies the container's `devcontainer.local_folder` label before attaching, starting or removing it, and refuses to touch a container that belongs to a different workspace.
+- Compose projects get a stable per-workspace project name (`bondar-<hash>`), so compose containers never collide either.
 
 ## Background processes
 

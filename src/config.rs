@@ -45,7 +45,7 @@ pub struct DevContainerConfig {
     pub container_env: HashMap<String, String>,
 
     #[serde(rename = "remoteEnv", default)]
-    pub remote_env: HashMap<String, String>,
+    pub remote_env: HashMap<String, Option<String>>,
 
     #[serde(default)]
     pub secrets: Option<HashMap<String, serde_json::Value>>,
@@ -213,9 +213,9 @@ impl DevContainerConfig {
             if trimmed.is_empty() {
                 return Err(BondarError::Config("'name' must not be empty".to_string()));
             }
-            if !trimmed.chars().any(|c| c.is_alphanumeric()) {
+            if !trimmed.chars().any(|c| c.is_ascii_alphanumeric()) {
                 return Err(BondarError::Config(
-                    "'name' must contain at least one alphanumeric character".to_string(),
+                    "'name' must contain at least one ASCII alphanumeric character".to_string(),
                 ));
             }
         }
@@ -247,12 +247,90 @@ impl DevContainerConfig {
                 "'workspaceFolder' must be specified when using 'workspaceMount'".to_string(),
             ));
         }
+        if let Some(m) = &self.workspace_mount
+            && m.trim().is_empty()
+        {
+            return Err(BondarError::Config(
+                "'workspaceMount' must not be empty".to_string(),
+            ));
+        }
         if let Some(f) = &self.workspace_folder
             && f.trim().is_empty()
         {
             return Err(BondarError::Config(
                 "'workspaceFolder' must not be empty".to_string(),
             ));
+        }
+        if let Some(f) = &self.workspace_folder
+            && !f.starts_with('/')
+        {
+            return Err(BondarError::Config(
+                "'workspaceFolder' must be an absolute path inside the container".to_string(),
+            ));
+        }
+        for m in &self.mounts {
+            match m {
+                MountValue::String(s) if s.trim().is_empty() => {
+                    return Err(BondarError::Config(
+                        "'mounts' entries must not be empty".to_string(),
+                    ));
+                }
+                MountValue::Object(o) => {
+                    if let Some(t) = &o.target
+                        && t.trim().is_empty()
+                    {
+                        return Err(BondarError::Config(
+                            "'mounts' target must not be empty".to_string(),
+                        ));
+                    }
+                    if o.target.is_none() {
+                        return Err(BondarError::Config(
+                            "'mounts' objects must specify a target".to_string(),
+                        ));
+                    }
+                    if let Some(t) = &o.mount_type
+                        && t.trim().is_empty()
+                    {
+                        return Err(BondarError::Config(
+                            "'mounts' type must not be empty".to_string(),
+                        ));
+                    }
+                    if o.mount_type.is_none() {
+                        return Err(BondarError::Config(
+                            "'mounts' objects must specify a type".to_string(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for cap in &self.cap_add {
+            if cap.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'capAdd' entries must not be empty".to_string(),
+                ));
+            }
+        }
+        for opt in &self.security_opt {
+            if opt.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'securityOpt' entries must not be empty".to_string(),
+                ));
+            }
+        }
+        for arg in &self.run_args {
+            if arg.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'runArgs' entries must not be empty".to_string(),
+                ));
+            }
+        }
+        for s in &self.run_services {
+            if s.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'runServices' entries must not be empty".to_string(),
+                ));
+            }
         }
         if let Some(f) = &self.docker_compose_file {
             let empty = match f {
@@ -280,6 +358,70 @@ impl DevContainerConfig {
                     "'containerEnv'/'remoteEnv' keys must not be empty".to_string(),
                 ));
             }
+            if key.contains('=') {
+                return Err(BondarError::Config(format!(
+                    "'containerEnv'/'remoteEnv' key '{key}' must not contain '='"
+                )));
+            }
+        }
+        if let Some(feats) = &self.features {
+            for id in feats.keys() {
+                if id.trim().is_empty() {
+                    return Err(BondarError::Config(
+                        "'features' keys must not be empty".to_string(),
+                    ));
+                }
+            }
+        }
+        if let Some(secrets) = &self.secrets {
+            for key in secrets.keys() {
+                if key.trim().is_empty() {
+                    return Err(BondarError::Config(
+                        "'secrets' keys must not be empty".to_string(),
+                    ));
+                }
+                if key.contains('=') {
+                    return Err(BondarError::Config(format!(
+                        "'secrets' key '{key}' must not contain '='"
+                    )));
+                }
+            }
+        }
+        for port in &self.forward_ports {
+            match port {
+                ForwardPort::Number(n) if *n == 0 => {
+                    return Err(BondarError::Config(format!(
+                        "'forwardPorts' entry {n} is outside the valid port range 1-65535"
+                    )));
+                }
+                ForwardPort::Text(s) => {
+                    crate::docker::validate_port_spec(s).map_err(|e| {
+                        BondarError::Config(format!("'forwardPorts' entry '{s}' is invalid: {e}"))
+                    })?;
+                }
+                _ => {}
+            }
+        }
+        if let Some(app) = &self.app_port {
+            let ports: Vec<&PortValue> = match app {
+                AppPortValue::Single(p) => vec![p],
+                AppPortValue::Multiple(v) => v.iter().collect(),
+            };
+            for p in ports {
+                match p {
+                    PortValue::Number(n) if *n == 0 => {
+                        return Err(BondarError::Config(format!(
+                            "'appPort' entry {n} is outside the valid port range 1-65535"
+                        )));
+                    }
+                    PortValue::Text(s) => {
+                        crate::docker::validate_port_spec(s).map_err(|e| {
+                            BondarError::Config(format!("'appPort' entry '{s}' is invalid: {e}"))
+                        })?;
+                    }
+                    _ => {}
+                }
+            }
         }
         Ok(())
     }
@@ -292,11 +434,26 @@ impl DevContainerConfig {
             .unwrap_or_else(|| "/workspace".to_string())
     }
 
+    /// `remoteEnv` entries with a `null` value are treated as unset (the
+    /// devcontainer schema allows `null` to remove an inherited variable).
+    pub fn remote_env_resolved(&self) -> HashMap<String, String> {
+        self.remote_env
+            .iter()
+            .filter_map(|(k, v)| v.clone().map(|val| (k.clone(), val)))
+            .collect()
+    }
+
     pub fn container_name(&self, workspace_path: &Path) -> String {
         if let Some(name) = &self.name {
             let sanitized: String = name
                 .chars()
-                .map(|c| if c.is_alphanumeric() { c } else { '-' })
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
                 .collect();
             format!("bondar-{sanitized}")
         } else {
@@ -306,9 +463,20 @@ impl DevContainerConfig {
                 .unwrap_or("workspace");
             let sanitized: String = basename
                 .chars()
-                .map(|c| if c.is_alphanumeric() { c } else { '-' })
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '-'
+                    }
+                })
                 .collect();
-            format!("bondar-{sanitized}")
+            let suffix = if sanitized.is_empty() {
+                "workspace".to_string()
+            } else {
+                sanitized
+            };
+            format!("bondar-{suffix}")
         }
     }
 }
@@ -351,6 +519,12 @@ pub fn load_config(
 }
 
 pub fn strip_json_comments(input: &str) -> String {
+    let stripped = strip_comment_tokens(input);
+    strip_trailing_commas(&stripped)
+}
+
+/// Remove `//` line and `/* */` block comments, preserving string contents.
+fn strip_comment_tokens(input: &str) -> String {
     let mut output = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     let mut in_string = false;
@@ -396,6 +570,48 @@ pub fn strip_json_comments(input: &str) -> String {
                     }
                     prev_star = nc == '*';
                 }
+                continue;
+            }
+        }
+
+        output.push(c);
+    }
+
+    output
+}
+
+/// JSONC allows trailing commas before '}' or ']' (e.g. "key": "v",).
+/// Runs after comment removal so a comma followed by a comment is also handled.
+fn strip_trailing_commas(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while let Some(c) = chars.next() {
+        if in_string {
+            output.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if c == '"' {
+            in_string = true;
+            output.push(c);
+            continue;
+        }
+
+        if c == ',' {
+            let mut lookahead = chars.clone();
+            if let Some(nc) = lookahead.find(|&x| !x.is_whitespace())
+                && (nc == '}' || nc == ']')
+            {
                 continue;
             }
         }
@@ -500,18 +716,35 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_workspace_mount_requires_folder() {
-        let cfg: DevContainerConfig = serde_json::from_str(
-            r#"{"image": "ubuntu:22.04", "workspaceMount": "type=bind,source=.,target=/x"}"#,
-        )
-        .unwrap();
-        assert!(cfg.validate().is_err());
+    fn test_validate_secrets_keys() {
+        let eq: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"A=B": {"localEnv": "X"}}}"#)
+                .unwrap();
+        assert!(eq.validate().is_err());
 
-        let ok: DevContainerConfig = serde_json::from_str(
-            r#"{"image": "ubuntu:22.04", "workspaceMount": "type=bind,source=.,target=/x", "workspaceFolder": "/x"}"#,
-        )
-        .unwrap();
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"SEC": {"localEnv": "X"}}}"#)
+                .unwrap();
         assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_array_entries() {
+        let bad_cap: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "capAdd": [""]}"#).unwrap();
+        assert!(bad_cap.validate().is_err());
+
+        let bad_opt: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "securityOpt": [""]}"#).unwrap();
+        assert!(bad_opt.validate().is_err());
+
+        let bad_arg: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "runArgs": [""]}"#).unwrap();
+        assert!(bad_arg.validate().is_err());
+
+        let bad_svc: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "runServices": [""]}"#).unwrap();
+        assert!(bad_svc.validate().is_err());
     }
 
     #[test]
@@ -601,6 +834,72 @@ mod tests {
         let cfg2: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "remoteEnv": {"": "value"}}"#).unwrap();
         assert!(cfg2.validate().is_err());
+
+        // Keys must not contain '='
+        let eq: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "containerEnv": {"A=B": "v"}}"#).unwrap();
+        assert!(eq.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_workspace_folder_absolute() {
+        let rel: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "workspaceFolder": "relative"}"#).unwrap();
+        assert!(rel.validate().is_err());
+
+        let abs: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "workspaceFolder": "/ws"}"#).unwrap();
+        assert!(abs.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_mounts_not_empty() {
+        let empty_mount: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "mounts": [""]}"#).unwrap();
+        assert!(empty_mount.validate().is_err());
+
+        let empty_target: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"type": "bind", "target": ""}]}"#,
+        )
+        .unwrap();
+        assert!(empty_target.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_forward_ports_range() {
+        let bad: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "forwardPorts": [0]}"#).unwrap();
+        assert!(bad.validate().is_err());
+
+        // 65536 exceeds u16 and fails deserialization
+        assert!(
+            serde_json::from_str::<DevContainerConfig>(
+                r#"{"image": "ubuntu", "forwardPorts": [65536]}"#
+            )
+            .is_err()
+        );
+
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "forwardPorts": [1, 65535, "8080:80"]}"#)
+                .unwrap();
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_app_port_range_and_workspace_mount() {
+        let bad: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "appPort": [0]}"#).unwrap();
+        assert!(bad.validate().is_err());
+
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "appPort": [8080]}"#).unwrap();
+        assert!(ok.validate().is_ok());
+
+        let bad_mount: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "workspaceFolder": "/ws", "workspaceMount": ""}"#,
+        )
+        .unwrap();
+        assert!(bad_mount.validate().is_err());
     }
 
     #[test]
@@ -735,6 +1034,143 @@ mod tests {
         let stripped = strip_json_comments(input);
         let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
         assert!(v.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_strip_trailing_commas() {
+        let input = r#"{
+            "image": "ubuntu:22.04",
+            "forwardPorts": [3000, 4000,],
+        }"#;
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(v["image"], "ubuntu:22.04");
+        assert_eq!(v["forwardPorts"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_strip_trailing_comma_in_string() {
+        let input = r#"{"text": "a, } b,", "image": "x"}"#;
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(v["text"], "a, } b,");
+    }
+
+    #[test]
+    fn test_strip_trailing_comma_before_comment() {
+        // Very common JSONC pattern: the last entry has a trailing comma
+        // followed by a comment.
+        let input = "{\n  \"image\": \"ubuntu:22.04\", // last entry\n}";
+        let stripped = strip_json_comments(input);
+        let v: serde_json::Value = serde_json::from_str(&stripped).unwrap();
+        assert_eq!(v["image"], "ubuntu:22.04");
+
+        let input2 = "{\n  \"image\": \"ubuntu:22.04\", /* c */\n}";
+        let stripped2 = strip_json_comments(input2);
+        let v2: serde_json::Value = serde_json::from_str(&stripped2).unwrap();
+        assert_eq!(v2["image"], "ubuntu:22.04");
+    }
+
+    #[test]
+    fn test_load_config_with_trailing_commas() {
+        let dir = std::env::temp_dir().join("bondar-trailing-comma");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".devcontainer")).unwrap();
+        std::fs::write(
+            dir.join(".devcontainer/devcontainer.json"),
+            r#"{"image": "ubuntu:22.04", "name": "tc",}"#,
+        )
+        .unwrap();
+        let (cfg, _) = load_config(&dir, None).unwrap();
+        assert_eq!(cfg.image.as_deref(), Some("ubuntu:22.04"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_validate_unicode_name_rejected() {
+        let cfg: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "name": "テスト"}"#).unwrap();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_remote_env_null_accepted() {
+        let cfg: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "remoteEnv": {"A": null, "B": "x"}}"#)
+                .unwrap();
+        assert!(cfg.validate().is_ok());
+        let resolved = cfg.remote_env_resolved();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved.get("B").map(String::as_str), Some("x"));
+        assert!(!resolved.contains_key("A"));
+    }
+
+    #[test]
+    fn test_validate_mount_object_requires_type_and_target() {
+        let no_target: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"type": "bind", "source": "/a"}]}"#,
+        )
+        .unwrap();
+        assert!(no_target.validate().is_err());
+
+        let no_type: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"source": "/a", "target": "/b"}]}"#,
+        )
+        .unwrap();
+        assert!(no_type.validate().is_err());
+
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"type": "bind", "source": "/a", "target": "/b"}]}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_port_string_forms() {
+        for bad in ["0", "", "65536", "8080-", "8080:abc", "abc"] {
+            let cfg: DevContainerConfig = serde_json::from_str(&format!(
+                r#"{{"image": "ubuntu", "forwardPorts": ["{bad}"]}}"#
+            ))
+            .unwrap();
+            assert!(cfg.validate().is_err(), "expected '{bad}' to fail");
+        }
+        for good in [
+            "8080",
+            "8080-8085",
+            "8080:80",
+            "127.0.0.1:9090",
+            "[::1]:8080",
+            "db:5432",
+            "0:8080",
+            "8080/udp",
+            "8080-8085:8080-8085",
+        ] {
+            let cfg: DevContainerConfig = serde_json::from_str(&format!(
+                r#"{{"image": "ubuntu", "forwardPorts": ["{good}"]}}"#
+            ))
+            .unwrap();
+            assert!(cfg.validate().is_ok(), "expected '{good}' to pass");
+        }
+        let bad_app: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "appPort": ["0"]}"#).unwrap();
+        assert!(bad_app.validate().is_err());
+    }
+
+    #[test]
+    fn test_container_name_ascii_sanitized() {
+        let cfg = DevContainerConfig {
+            name: Some("My_Dev!".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.container_name(Path::new("/tmp/x")), "bondar-My_Dev-");
+    }
+
+    #[test]
+    fn test_json_object_preserves_declaration_order() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"z": 1, "a": 2, "m": 3}"#).unwrap();
+        let keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, vec!["z", "a", "m"]);
     }
 
     #[test]

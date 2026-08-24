@@ -21,6 +21,12 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     let shutdown = cfg.shutdown_action.as_deref().unwrap_or("remove");
     let container_name = cfg.container_name(&ws);
 
+    // Never stop/remove a container that belongs to a different workspace
+    // (same-basename name collision).
+    if shutdown != "none" && docker::container_exists(&container_name)? {
+        docker::ensure_container_matches_workspace(&container_name, &ws)?;
+    }
+
     match shutdown {
         "none" => {
             println!("shutdownAction is 'none', skipping down (container kept)");
@@ -33,6 +39,18 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             println!("Stopping container {container_name} (shutdownAction: stopContainer)...");
             docker::stop_container(&container_name)?;
             println!("Container {container_name} stopped (kept for reuse)");
+        }
+        "stopCompose" => {
+            eprintln!(
+                "Warning: shutdownAction 'stopCompose' requires dockerComposeFile; treating as remove"
+            );
+            if !docker::container_exists(&container_name)? {
+                println!("Container {container_name} does not exist");
+                return Ok(());
+            }
+            println!("Removing container {container_name}...");
+            docker::remove_container(&container_name)?;
+            println!("Container {container_name} removed");
         }
         _ => {
             if !docker::container_exists(&container_name)? {

@@ -4,7 +4,7 @@ use jsonschema::Validator;
 
 use crate::config;
 use crate::docker;
-use crate::error::Result;
+use crate::error::{BondarError, Result};
 
 static SCHEMA_JSON: &str = include_str!("../schemas/devcontainer.schema.json");
 
@@ -14,15 +14,63 @@ pub fn run(
     include_merged_configuration: bool,
 ) -> Result<()> {
     let ws = docker::get_workspace_folder(workspace_folder)?;
-    let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+
+    // Determine the config path without validating, so read-configuration can
+    // report every problem instead of failing on the first one.
+    let cfg_path = if let Some(p) = &config_path {
+        p.canonicalize().map_err(|e| {
+            BondarError::NotFound(format!("Cannot resolve config path {}: {e}", p.display()))
+        })?
+    } else if let Some(p) = config::find_config_path(&ws) {
+        p
+    } else {
+        return Err(BondarError::NotFound(format!(
+            "devcontainer.json not found in {}",
+            ws.display()
+        )));
+    };
 
     println!("Config file: {}", cfg_path.display());
     println!("Workspace: {}", ws.display());
     println!();
 
-    let json = serde_json::to_string_pretty(&cfg).unwrap_or_else(|_| "{}".to_string());
-    println!("{json}");
-    println!();
+    let raw = std::fs::read_to_string(&cfg_path).map_err(BondarError::Io)?;
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+    let stripped = config::strip_json_comments(raw);
+    let raw_value: serde_json::Value = serde_json::from_str(&stripped)
+        .map_err(|e| BondarError::Config(format!("Invalid JSON: {e}")))?;
+
+    let mut errors: Vec<String> = Vec::new();
+
+    // Strict JSON Schema validation against the official devcontainer schema.
+    let schema: serde_json::Value = serde_json::from_str(SCHEMA_JSON)
+        .map_err(|e| BondarError::Config(format!("Schema parse error: {e}")))?;
+    let validator = Validator::options()
+        .with_draft(jsonschema::Draft::Draft201909)
+        .build(&schema)
+        .map_err(|e| BondarError::Config(format!("Schema build error: {e}")))?;
+    for e in validator.iter_errors(&raw_value) {
+        errors.push(format!("  {}: {}", e.instance_path, e));
+    }
+
+    // Typed parse; type errors are reported as validation errors
+    let mut typed_ok = true;
+    let cfg: config::DevContainerConfig = match serde_json::from_str(&stripped) {
+        Ok(c) => c,
+        Err(e) => {
+            errors.push(format!("  {e}"));
+            typed_ok = false;
+            config::DevContainerConfig::default()
+        }
+    };
+
+    // Print the resolved configuration; when the typed parse failed there is
+    // nothing meaningful to print beyond the raw input.
+    if typed_ok {
+        let json = serde_json::to_string_pretty(&cfg).unwrap_or_else(|_| "{}".to_string());
+        println!("{json}");
+        println!();
+    }
 
     let summary = crate::lifecycle::lifecycle_summary(&cfg);
     if !summary.is_empty() {
@@ -56,44 +104,19 @@ pub fn run(
         }
     }
 
-    // Strict JSON Schema validation against the official devcontainer schema.
-    // Validate the raw file contents (after comment stripping), not the
-    // serialized struct which contains all fields including nulls.
-    let mut errors: Vec<String> = Vec::new();
-    let raw = std::fs::read_to_string(&cfg_path).map_err(crate::error::BondarError::Io)?;
-    let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
-    let stripped = crate::config::strip_json_comments(raw);
-    let raw_value: serde_json::Value = serde_json::from_str(&stripped)
-        .map_err(|e| crate::error::BondarError::Config(format!("Invalid JSON: {e}")))?;
-
-    let schema: serde_json::Value = serde_json::from_str(SCHEMA_JSON)
-        .map_err(|e| crate::error::BondarError::Config(format!("Schema parse error: {e}")))?;
-    let validator = Validator::options()
-        .with_draft(jsonschema::Draft::Draft201909)
-        .build(&schema)
-        .map_err(|e| crate::error::BondarError::Config(format!("Schema build error: {e}")))?;
-
-    for e in validator.iter_errors(&raw_value) {
-        errors.push(format!("  {}: {}", e.instance_path, e));
-    }
-
     // Additional cross-field validation (deduplicated against schema errors)
     let push_error = |errors: &mut Vec<String>, msg: String| {
         if !errors.contains(&msg) {
             errors.push(msg);
         }
     };
-    if cfg.image.is_none() && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
-        push_error(
-            &mut errors,
-            "  No image/build/dockerComposeFile specified".to_string(),
-        );
-    }
-    if cfg.docker_compose_file.is_some() && cfg.service.is_none() {
-        push_error(
-            &mut errors,
-            "  dockerComposeFile requires service".to_string(),
-        );
+    // Include the internal validation checks (e.g. absolute workspaceFolder,
+    // env keys without '=', non-empty mounts) as reported errors. When the
+    // typed parse failed, the default config would add unrelated errors, so
+    // those checks are skipped.
+    if typed_ok && let Err(e) = cfg.validate() {
+        let msg = e.to_string().replace("Config error: ", "");
+        push_error(&mut errors, format!("  {msg}"));
     }
     if let Some(wait) = &cfg.wait_for {
         let valid = [
@@ -104,7 +127,10 @@ pub fn run(
             "postStartCommand",
         ];
         if !valid.contains(&wait.as_str()) {
-            push_error(&mut errors, format!("  waitFor '{wait}' is invalid"));
+            // Skip when the schema already reported this (message differs)
+            if !errors.iter().any(|e| e.contains("waitFor")) {
+                push_error(&mut errors, format!("  waitFor '{wait}' is invalid"));
+            }
         }
     }
 
@@ -116,6 +142,7 @@ pub fn run(
             eprintln!("{e}");
         }
         eprintln!("Configuration is INVALID");
+        crate::lifecycle::reap_children();
         std::process::exit(1);
     }
 
@@ -163,20 +190,44 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     } else {
         cfg.workspace_folder_or_default()
     };
-    for (k, v) in cfg.container_env.iter().chain(cfg.remote_env.iter()) {
-        let expanded = docker::expand_vars_for_host_with_target(v, ws, &target);
-        env.insert(k.clone(), Value::String(expanded));
+    // Container env and remote env (null remoteEnv entries are skipped).
+    // ${containerEnv:KEY} references resolve against the raw containerEnv
+    // entries (same semantics as `docker run`), then generic expansion applies.
+    let all_env: Vec<(&String, Option<&str>)> = cfg
+        .container_env
+        .iter()
+        .map(|(k, v)| (k, Some(v.as_str())))
+        .chain(cfg.remote_env.iter().map(|(k, v)| (k, v.as_deref())))
+        .collect();
+    for (k, v) in &all_env {
+        let Some(val) = v else {
+            continue;
+        };
+        let resolved = docker::resolve_container_env_value(val, &cfg.container_env);
+        let expanded = docker::expand_vars_for_host_with_target(&resolved, ws, &target);
+        env.insert((*k).clone(), Value::String(expanded));
     }
-    for (k, v) in docker::resolve_secrets(cfg) {
-        env.insert(k, Value::String(v));
-    }
+    // Secret values are never printed; only their key names are listed.
+    let secret_names: Vec<String> = cfg
+        .secrets
+        .as_ref()
+        .map(|s| s.keys().cloned().collect())
+        .unwrap_or_default();
 
-    merged.insert("name".into(), json!(cfg.name));
+    let default_name = ws
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "workspace".to_string());
+    merged.insert(
+        "name".into(),
+        json!(cfg.name.clone().unwrap_or(default_name)),
+    );
     merged.insert("image".into(), json!(cfg.image));
     merged.insert("workspaceFolder".into(), json!(cfg.workspace_folder));
     merged.insert("remoteUser".into(), json!(cfg.remote_user));
     merged.insert("containerUser".into(), json!(cfg.container_user));
     merged.insert("mergedEnvironment".into(), Value::Object(env));
+    merged.insert("secrets".into(), json!(secret_names));
     merged.insert(
         "forwardPorts".into(),
         json!(
@@ -189,12 +240,47 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
                 .collect::<Vec<_>>()
         ),
     );
-    merged.insert("mounts".into(), json!(cfg.mounts));
+    let expanded_mounts: Vec<Value> = cfg
+        .mounts
+        .iter()
+        .map(|m| match m {
+            config::MountValue::String(s) => {
+                Value::String(docker::expand_vars_for_host_with_target(s, ws, &target))
+            }
+            config::MountValue::Object(o) => {
+                let mut obj = serde_json::Map::new();
+                if let Some(s) = &o.source {
+                    obj.insert(
+                        "source".into(),
+                        Value::String(docker::expand_vars_for_host_with_target(s, ws, &target)),
+                    );
+                }
+                if let Some(t) = &o.target {
+                    obj.insert(
+                        "target".into(),
+                        Value::String(docker::expand_vars_for_host_with_target(t, ws, &target)),
+                    );
+                }
+                if let Some(t) = &o.mount_type {
+                    obj.insert("type".into(), Value::String(t.clone()));
+                }
+                if let Some(r) = o.readonly {
+                    obj.insert("readonly".into(), Value::Bool(r));
+                }
+                Value::Object(obj)
+            }
+        })
+        .collect();
+    merged.insert("mounts".into(), Value::Array(expanded_mounts));
     merged.insert("features".into(), json!(cfg.features));
     merged.insert("runServices".into(), json!(cfg.run_services));
     merged.insert("shutdownAction".into(), json!(cfg.shutdown_action));
     merged.insert("waitFor".into(), json!(cfg.wait_for));
-    merged.insert("containerName".into(), json!(cfg.container_name(ws)));
+    // containerName only applies to image/Dockerfile configs; compose
+    // containers are named by the per-workspace compose project.
+    if cfg.docker_compose_file.is_none() {
+        merged.insert("containerName".into(), json!(cfg.container_name(ws)));
+    }
     let default_ws = if cfg.docker_compose_file.is_some() {
         cfg.workspace_folder
             .clone()

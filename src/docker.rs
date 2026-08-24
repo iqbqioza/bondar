@@ -48,16 +48,20 @@ pub fn build_image(
         .ok_or_else(|| BondarError::Config("No 'build' section found, cannot build".to_string()))?;
 
     let config_dir = config_path.parent().unwrap_or(workspace_folder);
+    // ${containerWorkspaceFolder} in build inputs resolves to the configured
+    // workspaceFolder (default "/workspace")
+    let workspace_target = config.workspace_folder_or_default();
     let dockerfile = build
         .dockerfile
         .clone()
         .unwrap_or_else(|| "Dockerfile".to_string());
-    let dockerfile = expand_vars_for_host(&dockerfile, workspace_folder);
+    let dockerfile =
+        expand_vars_for_host_with_target(&dockerfile, workspace_folder, &workspace_target);
     let dockerfile_path = config_dir.join(&dockerfile);
 
     if !dockerfile_path.exists() {
         return Err(BondarError::NotFound(format!(
-            "Dockerfile not found: {}",
+            "Dockerfile not found: {} (resolved relative to the devcontainer.json directory)",
             dockerfile_path.display()
         )));
     }
@@ -66,27 +70,25 @@ pub fn build_image(
         .context
         .as_ref()
         .map(|c| {
-            let expanded = expand_vars_for_host(c, workspace_folder);
+            let expanded = expand_vars_for_host_with_target(c, workspace_folder, &workspace_target);
             config_dir.join(&expanded)
         })
         .unwrap_or_else(|| config_dir.to_path_buf());
 
-    let context_str = context.to_string_lossy().to_string();
-    let dockerfile_str = dockerfile_path.to_string_lossy().to_string();
+    let context_str = context
+        .to_str()
+        .ok_or_else(|| BondarError::Config("Build context path is not valid UTF-8".to_string()))?;
+    let dockerfile_str = dockerfile_path
+        .to_str()
+        .ok_or_else(|| BondarError::Config("Dockerfile path is not valid UTF-8".to_string()))?;
 
     let mut cmd = Command::new("docker");
     cmd.arg("build");
-    cmd.arg("-f").arg(&dockerfile_str);
+    cmd.arg("-f").arg(dockerfile_str);
     cmd.arg("-t").arg(image_name);
 
     for (k, v) in &build.args {
-        let expanded = expand_vars_for_host(v, workspace_folder);
-        if expanded.is_empty() {
-            eprintln!(
-                "Warning: build arg '{k}' resolved to an empty value (unset variable?); skipping"
-            );
-            continue;
-        }
+        let expanded = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
         cmd.arg("--build-arg").arg(format!("{k}={expanded}"));
     }
 
@@ -95,19 +97,21 @@ pub fn build_image(
     }
 
     for opt in &build.options {
-        let expanded = expand_vars_for_host(opt, workspace_folder);
+        let expanded = expand_vars_for_host_with_target(opt, workspace_folder, &workspace_target);
         cmd.arg(&expanded);
     }
 
     if let Some(cache_from) = &build.cache_from {
         match cache_from {
             crate::config::CacheFromValue::Single(s) => {
-                let expanded = expand_vars_for_host(s, workspace_folder);
+                let expanded =
+                    expand_vars_for_host_with_target(s, workspace_folder, &workspace_target);
                 cmd.arg("--cache-from").arg(expanded);
             }
             crate::config::CacheFromValue::Multiple(vec) => {
                 for s in vec {
-                    let expanded = expand_vars_for_host(s, workspace_folder);
+                    let expanded =
+                        expand_vars_for_host_with_target(s, workspace_folder, &workspace_target);
                     cmd.arg("--cache-from").arg(expanded);
                 }
             }
@@ -118,7 +122,7 @@ pub fn build_image(
         cmd.arg("--no-cache");
     }
 
-    cmd.arg(&context_str);
+    cmd.arg(context_str);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
 
     println!("Building image {image_name}...");
@@ -142,14 +146,19 @@ pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) 
             let sanitized: String = name
                 .chars()
                 .map(|c| {
-                    if c.is_alphanumeric() {
+                    if c.is_ascii_alphanumeric() {
                         c.to_ascii_lowercase()
                     } else {
                         '-'
                     }
                 })
                 .collect();
-            format!("bondar-{sanitized}")
+            let suffix = if sanitized.is_empty() {
+                "workspace".to_string()
+            } else {
+                sanitized
+            };
+            format!("bondar-{suffix}")
         } else {
             let basename = workspace_folder
                 .file_name()
@@ -158,14 +167,19 @@ pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) 
             let sanitized: String = basename
                 .chars()
                 .map(|c| {
-                    if c.is_alphanumeric() {
+                    if c.is_ascii_alphanumeric() {
                         c.to_ascii_lowercase()
                     } else {
                         '-'
                     }
                 })
                 .collect();
-            format!("bondar-{sanitized}")
+            let suffix = if sanitized.is_empty() {
+                "workspace".to_string()
+            } else {
+                sanitized
+            };
+            format!("bondar-{suffix}")
         };
         Ok(base)
     } else if let Some(image) = &config.image {
@@ -189,6 +203,48 @@ pub fn container_exists(name: &str) -> Result<bool> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.lines().any(|line| line.trim() == name))
+}
+
+/// The workspace path a container was created for (from its label), if any.
+pub fn container_workspace(name: &str) -> Result<Option<String>> {
+    let output = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{index .Config.Labels \"devcontainer.local_folder\"}}",
+            name,
+        ])
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to inspect container {name}: {e}")))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let label = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if label.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(label))
+    }
+}
+
+/// Fail when an existing container with this name was created for a different
+/// workspace. Two workspaces sharing the same directory basename collide on
+/// `bondar-{basename}`; without this check `up`/`exec`/`down` would operate on
+/// (or remove) the other workspace's container.
+pub fn ensure_container_matches_workspace(name: &str, workspace_folder: &Path) -> Result<()> {
+    let ws_str = workspace_folder.to_string_lossy().to_string();
+    match container_workspace(name)? {
+        Some(label) if label == ws_str => Ok(()),
+        Some(label) => Err(BondarError::Docker(format!(
+            "Container '{name}' already exists for workspace '{label}' (current: '{ws_str}'); set a unique 'name' in devcontainer.json or remove that container first"
+        ))),
+        None => {
+            eprintln!(
+                "Warning: container '{name}' has no workspace label; assuming it belongs to this workspace"
+            );
+            Ok(())
+        }
+    }
 }
 
 pub fn container_running(name: &str) -> Result<bool> {
@@ -224,7 +280,8 @@ pub fn container_exists_and_running(name: &str) -> Result<(bool, bool)> {
         };
         if n.trim() == name {
             let status = parts.next().unwrap_or("");
-            return Ok((true, status.starts_with("Up")));
+            let running = status.starts_with("Up") || status.starts_with("Restarting");
+            return Ok((true, running));
         }
     }
     Ok((false, false))
@@ -332,12 +389,23 @@ pub fn create_and_start_container(
     let workspace_folder_str = workspace_folder.to_string_lossy().to_string();
     let workspace_target = config.workspace_folder_or_default();
 
+    // The workspace path is embedded in --mount/--label values; ',' breaks the
+    // docker --mount parser and '=' breaks label filters.
+    if workspace_folder_str.contains(',') {
+        eprintln!(
+            "Warning: workspace path contains ',', which breaks docker --mount parsing; the workspace mount will fail"
+        );
+    }
+    if workspace_folder_str.contains('=') {
+        eprintln!("Warning: workspace path contains '=', which breaks docker label filters");
+    }
+
     let mut cmd = Command::new("docker");
     cmd.arg("run");
     cmd.arg("-d");
     cmd.arg("--name").arg(container_name);
 
-    let use_init = config.init.unwrap_or(false) || config.override_command.unwrap_or(true);
+    let use_init = config.init.unwrap_or(false);
     if use_init {
         cmd.arg("--init");
     }
@@ -402,6 +470,14 @@ pub fn create_and_start_container(
 
     // Additional mounts
     for m in &config.mounts {
+        if let MountValue::Object(obj) = m
+            && let Some(t) = &obj.target
+            && t == &workspace_target
+        {
+            eprintln!(
+                "Warning: mount target '{t}' duplicates the workspace mount; docker may reject it"
+            );
+        }
         match m {
             MountValue::String(s) => {
                 let expanded =
@@ -434,19 +510,29 @@ pub fn create_and_start_container(
             }
         }
     }
-
     // Env - containerEnv is set on the container; remoteEnv applies only at exec time
+    // ${containerEnv:KEY} references resolve against the raw containerEnv entries
+    // (cycle-safe, bounded), then generic expansion (${localEnv:} etc.) applies.
     for (k, v) in &config.container_env {
-        let expanded_v = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
-        cmd.arg("-e").arg(format!("{k}={expanded_v}"));
+        let resolved = resolve_container_env_value(v, &config.container_env);
+        let expanded =
+            expand_vars_for_host_with_target(&resolved, workspace_folder, &workspace_target);
+        cmd.arg("-e").arg(format!("{k}={expanded}"));
     }
 
     // Secrets resolved from local env (devcontainer spec: { "MY_SECRET": { "localEnv": "VAR" } })
-    for (k, v) in resolve_secrets(config) {
+    let resolved_secrets = resolve_secrets(config);
+    for (k, v) in &resolved_secrets {
+        if config.container_env.contains_key(k) {
+            eprintln!(
+                "Warning: secret key '{k}' conflicts with an existing environment entry and will override it"
+            );
+        }
         cmd.arg("-e").arg(format!("{k}={v}"));
     }
 
     // Publish / forward ports
+    let mut published: Vec<String> = Vec::new();
     for port in &config.forward_ports {
         let port_str = match port {
             crate::config::ForwardPort::Number(n) => n.to_string(),
@@ -457,9 +543,15 @@ pub fn create_and_start_container(
             continue;
         }
         if let Some(mut publish) = publish_port_arg(&port_str) {
-            if is_udp_port(config, &port_str) {
+            if is_udp_port(config, &port_str) && !publish.ends_with("/udp") {
                 publish.push_str("/udp");
             }
+            if published.contains(&publish) {
+                eprintln!(
+                    "Warning: port '{publish}' is published more than once; docker will bind it repeatedly"
+                );
+            }
+            published.push(publish.clone());
             cmd.arg("-p").arg(publish);
         } else {
             eprintln!(
@@ -481,9 +573,15 @@ pub fn create_and_start_container(
                 continue;
             }
             if let Some(mut publish) = publish_port_arg(&p) {
-                if is_udp_port(config, &p) {
+                if is_udp_port(config, &p) && !publish.ends_with("/udp") {
                     publish.push_str("/udp");
                 }
+                if published.contains(&publish) {
+                    eprintln!(
+                        "Warning: port '{publish}' is published more than once; docker will bind it repeatedly"
+                    );
+                }
+                published.push(publish.clone());
                 cmd.arg("-p").arg(publish);
             } else {
                 eprintln!(
@@ -522,19 +620,152 @@ pub fn create_and_start_container(
     Ok(())
 }
 
-fn port_value_to_string(p: &crate::config::PortValue) -> String {
+pub fn port_value_to_string(p: &crate::config::PortValue) -> String {
     match p {
         crate::config::PortValue::Number(n) => n.to_string(),
         crate::config::PortValue::Text(s) => s.clone(),
     }
 }
 
+/// Validate a `forwardPorts`/`appPort` string form: a plain port or range,
+/// `host:container`, `ip:host:container`, bracketed IPv6 forms, an optional
+/// `/udp` or `/tcp` suffix, and service-host names like `db:5432`. Host-side
+/// ports may be `0` (random host port); container-side ports must be 1-65535.
+pub fn validate_port_spec(s: &str) -> std::result::Result<(), String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("empty port specification".to_string());
+    }
+    let s = s
+        .strip_suffix("/udp")
+        .or_else(|| s.strip_suffix("/tcp"))
+        .unwrap_or(s);
+
+    if s.starts_with('[') {
+        let Some(end) = s.find(']') else {
+            return Err("unterminated IPv6 address".to_string());
+        };
+        let rest = &s[end + 1..];
+        let Some((_, ports_part)) = rest.split_once(':') else {
+            return Err("invalid IPv6 port form".to_string());
+        };
+        let parts: Vec<&str> = ports_part.split(':').collect();
+        if parts.is_empty() || parts.len() > 2 || parts.iter().any(|p| p.is_empty()) {
+            return Err("invalid IPv6 port form".to_string());
+        }
+        for p in parts {
+            validate_container_port(p)?;
+        }
+        return Ok(());
+    }
+
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        1 => validate_container_port(parts[0]),
+        2 => {
+            // Validate the container side; validate the host side too when it
+            // is a numeric port/range ("0" = random host port is allowed)
+            validate_host_port(parts[0])?;
+            validate_container_port(parts[1])
+        }
+        3 => {
+            // Three-part forms are "ip:host:container"; the first part must be
+            // an IPv4 address (e.g. "127.0.0.1:8080:80")
+            if !is_ipv4(parts[0]) {
+                return Err(format!("'{}' is not a valid IPv4 bind address", parts[0]));
+            }
+            validate_host_port(parts[1])?;
+            validate_container_port(parts[2])
+        }
+        _ => Err("too many ':' in port specification".to_string()),
+    }
+}
+
+fn validate_host_port(p: &str) -> std::result::Result<(), String> {
+    // Service names and IP addresses are not numeric ports - nothing to check
+    if p.is_empty() || !p.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return Ok(());
+    }
+    if p == "0" {
+        return Ok(());
+    }
+    if let Some((a, b)) = p.split_once('-') {
+        let a: u16 = a
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid host port or range"))?;
+        let b: u16 = b
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid host port or range"))?;
+        if a > b {
+            return Err(format!("host port range '{p}' is reversed"));
+        }
+        Ok(())
+    } else {
+        p.parse::<u16>()
+            .map(|_| ())
+            .map_err(|_| format!("'{p}' is not a valid host port"))
+    }
+}
+
+fn validate_container_port(p: &str) -> std::result::Result<(), String> {
+    if let Some((a, b)) = p.split_once('-') {
+        let a: u16 = a
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid port or range"))?;
+        let b: u16 = b
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid port or range"))?;
+        if a == 0 || b == 0 {
+            return Err("port '0' is not valid on the container side".to_string());
+        }
+        if a > b {
+            return Err(format!("port range '{p}' is reversed"));
+        }
+        Ok(())
+    } else {
+        let n: u16 = p
+            .parse()
+            .map_err(|_| format!("'{p}' is not a valid port"))?;
+        if n == 0 {
+            return Err("port '0' is not valid on the container side".to_string());
+        }
+        Ok(())
+    }
+}
+
+/// Look up a `portsAttributes`/`otherPortsAttributes` entry for a container
+/// port. Matches the exact key first, then range keys (e.g. "8080-8085" for
+/// port 8080). Regex keys are not evaluated (no process list available).
+fn attributes_entry<'a>(
+    attrs: &'a serde_json::Value,
+    container_port: &str,
+) -> Option<&'a serde_json::Value> {
+    if let Some(entry) = attrs.get(container_port) {
+        return Some(entry);
+    }
+    let port_num: u32 = container_port.parse().ok()?;
+    for (key, entry) in attrs.as_object()? {
+        if let Some((a, b)) = key.split_once('-')
+            && let (Ok(a), Ok(b)) = (a.parse::<u32>(), b.parse::<u32>())
+            && port_num >= a
+            && port_num <= b
+        {
+            return Some(entry);
+        }
+    }
+    None
+}
+
 pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
-    // Determine the container port portion of the spec
-    let container_port = port_spec.rsplit(':').next().unwrap_or(port_spec);
+    // Determine the container port portion of the spec (strip /udp suffix)
+    let container_port = port_spec
+        .rsplit(':')
+        .next()
+        .unwrap_or(port_spec)
+        .trim_end_matches("/udp");
     // Explicit per-port attributes take precedence
     if let Some(attrs) = &config.ports_attributes
-        && let Some(entry) = attrs.get(container_port)
+        && let Some(entry) = attributes_entry(attrs, container_port)
         && let Some(obj) = entry.as_object()
         && obj.get("protocol").and_then(|v| v.as_str()) == Some("udp")
     {
@@ -552,9 +783,13 @@ pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
 
 /// Whether `onAutoForward: "ignore"` disables publishing for the port.
 pub fn is_port_ignored(config: &DevContainerConfig, port_spec: &str) -> bool {
-    let container_port = port_spec.rsplit(':').next().unwrap_or(port_spec);
+    let container_port = port_spec
+        .rsplit(':')
+        .next()
+        .unwrap_or(port_spec)
+        .trim_end_matches("/udp");
     if let Some(attrs) = &config.ports_attributes
-        && let Some(entry) = attrs.get(container_port)
+        && let Some(entry) = attributes_entry(attrs, container_port)
         && let Some(obj) = entry.as_object()
         && obj.get("onAutoForward").and_then(|v| v.as_str()) == Some("ignore")
     {
@@ -589,7 +824,13 @@ fn publish_ipv6_arg(spec: &str) -> Option<String> {
         return None;
     }
     let rest = &spec[end + 1..];
-    let ports: Vec<&str> = rest.split(':').filter(|s| !s.is_empty()).collect();
+    // Rest is ":ports"; split off the leading separator and reject any
+    // additional empty segment (e.g. "[::1]:8080:").
+    let (_, ports_part) = rest.split_once(':')?;
+    let ports: Vec<&str> = ports_part.split(':').collect();
+    if ports.iter().any(|p| p.is_empty()) {
+        return None;
+    }
     match ports.len() {
         1 => {
             if is_port_or_range(ports[0]) {
@@ -613,10 +854,12 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     if spec.is_empty() {
         return None;
     }
-    // No colon: single port or range -> host:container with the same spec
+    // No colon: single port or range -> publish on all interfaces.
+    // The explicit 0.0.0.0 works around rootless Docker 29 (slirp4netns)
+    // failing to parse the bare "hostPort:containerPort" form.
     if !spec.contains(':') {
-        if is_port_or_range(spec) {
-            return Some(format!("{spec}:{spec}"));
+        if is_port_or_range(spec) && spec != "0" {
+            return Some(format!("0.0.0.0:{spec}:{spec}"));
         }
         return None;
     }
@@ -627,7 +870,7 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     if rest.len() == 1 {
         let host_is_ip = is_ipv4(first);
         let host_is_number = is_port_or_range(first);
-        let container_ok = is_port_or_range(rest[0]);
+        let container_ok = is_port_or_range(rest[0]) && rest[0] != "0";
         if !container_ok {
             // empty or non-numeric container port ("8080:" / "8080:abc")
             return None;
@@ -637,8 +880,9 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
             return Some(format!("{spec}:{}", rest[0]));
         }
         if host_is_number {
-            // "8080:80" -> "8080:80" (also ranges "8080-8085:8080-8085")
-            return Some(spec.to_string());
+            // "8080:80" -> "0.0.0.0:8080:80" (also ranges "8080-8085:8080-8085"
+            // and random host ports "0:8080")
+            return Some(format!("0.0.0.0:{spec}"));
         }
         // "db:5432" -> service host, cannot publish
         return None;
@@ -646,7 +890,7 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
     // "ip:host:container"
     if rest.len() == 2 {
         let ip_ok = is_ipv4(first);
-        if ip_ok && is_port_or_range(rest[0]) && is_port_or_range(rest[1]) {
+        if ip_ok && is_port_or_range(rest[0]) && is_port_or_range(rest[1]) && rest[1] != "0" {
             return Some(spec.to_string());
         }
     }
@@ -654,6 +898,9 @@ fn publish_port_arg_inner(spec: &str) -> Option<String> {
 }
 
 fn is_port_or_range(s: &str) -> bool {
+    // Allow "0" on the host side (docker interprets it as a random host port);
+    // container-side "0" is rejected by the callers via validate_port_spec and
+    // the `!= "0"` checks above.
     if s.parse::<u16>().is_ok() {
         return true;
     }
@@ -666,10 +913,6 @@ fn is_port_or_range(s: &str) -> bool {
 fn is_ipv4(s: &str) -> bool {
     let octets: Vec<&str> = s.split('.').collect();
     octets.len() == 4 && octets.iter().all(|x| x.parse::<u8>().is_ok())
-}
-
-pub fn expand_vars_for_host(input: &str, workspace_folder: &Path) -> String {
-    expand_vars_for_host_with_target(input, workspace_folder, "/workspace")
 }
 
 pub fn expand_vars_for_host_with_target(
@@ -691,6 +934,7 @@ pub fn expand_vars_for_host_with_target(
     let container_basename = container_workspace
         .rsplit('/')
         .next()
+        .filter(|s| !s.is_empty())
         .unwrap_or("workspace")
         .to_string();
     result = result.replace("${containerWorkspaceFolderBasename}", &container_basename);
@@ -716,6 +960,7 @@ pub fn expand_vars_for_container(
     let container_basename = container_workspace
         .rsplit('/')
         .next()
+        .filter(|s| !s.is_empty())
         .unwrap_or("workspace")
         .to_string();
 
@@ -730,7 +975,7 @@ pub fn expand_vars_for_container(
     result
 }
 
-fn devcontainer_id_for(workspace_folder: &Path) -> String {
+pub(crate) fn devcontainer_id_for(workspace_folder: &Path) -> String {
     let ws_str = workspace_folder.to_string_lossy().to_string();
     let mut hash: u64 = 14695981039346656037;
     for b in ws_str.bytes() {
@@ -738,6 +983,12 @@ fn devcontainer_id_for(workspace_folder: &Path) -> String {
         hash = hash.wrapping_mul(1099511628211);
     }
     format!("{hash:016x}")
+}
+
+/// Stable per-workspace compose project name, so workspaces with the same
+/// directory basename do not share compose projects/containers.
+pub fn compose_project_name(workspace_folder: &Path) -> String {
+    format!("bondar-{}", &devcontainer_id_for(workspace_folder)[..8])
 }
 
 fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
@@ -748,54 +999,89 @@ fn expand_devcontainer_id(input: &str, workspace_folder: &Path) -> String {
     input.replace("${devcontainerId}", &id)
 }
 
-fn expand_container_env_vars(input: &str) -> String {
-    let mut result = String::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '$' && chars.peek() == Some(&'{') {
-            chars.next();
-            let mut var_content = String::new();
-            let mut found_end = false;
-            for nc in chars.by_ref() {
-                if nc == '}' {
-                    found_end = true;
-                    break;
-                }
-                var_content.push(nc);
+/// Resolve `${containerEnv:KEY}` (and `${containerEnv:KEY:default}`) references
+/// against the raw `containerEnv` entries (bounded recursion, cycle-safe).
+/// Unmatched or self-referential keys are left untouched and fall through to
+/// `expand_container_env_vars` (host env / default).
+pub fn resolve_container_env_value(input: &str, raw: &HashMap<String, String>) -> String {
+    let mut result = input.to_string();
+    for _ in 0..10 {
+        let mut changed = false;
+        for (k, v) in raw {
+            let pat = format!("${{containerEnv:{k}}}");
+            if result.contains(&pat) {
+                result = result.replace(&pat, v);
+                changed = true;
             }
-            if found_end && var_content.starts_with("containerEnv:") {
-                let rest = &var_content["containerEnv:".len()..];
-                let (var_name, default_val) = if let Some(colon_pos) = rest.find(':') {
-                    (&rest[..colon_pos], Some(&rest[colon_pos + 1..]))
-                } else {
-                    (rest, None)
-                };
-                if var_name.is_empty() {
-                    eprintln!(
-                        "Warning: '${{containerEnv:}}' has an empty variable name, resolved to empty"
-                    );
-                }
-                let env_val = std::env::var(var_name)
-                    .unwrap_or_else(|_| default_val.unwrap_or("").to_string());
-                result.push_str(&env_val);
-            } else if found_end {
-                result.push_str("${");
-                result.push_str(&var_content);
-                result.push('}');
-            } else {
-                result.push_str("${");
-                result.push_str(&var_content);
+            // Default form: ${containerEnv:KEY:default}
+            let pat_default = format!("${{containerEnv:{k}:");
+            if result.contains(&pat_default) {
+                result = replace_container_env_default(&result, k, v);
+                changed = true;
             }
-        } else {
-            result.push(c);
+        }
+        if !changed {
+            break;
         }
     }
-
     result
 }
 
-fn expand_local_env_vars(input: &str) -> String {
+/// Replace `${containerEnv:KEY:...}` occurrences (up to the matching '}') with
+/// the map value, so the map wins over the default.
+fn replace_container_env_default(input: &str, key: &str, value: &str) -> String {
+    let prefix = format!("${{containerEnv:{key}:");
+    let mut result = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(pos) = rest.find(&prefix) {
+        result.push_str(&rest[..pos]);
+        let after = &rest[pos + prefix.len()..];
+        if let Some(end) = after.find('}') {
+            result.push_str(value);
+            rest = &after[end + 1..];
+        } else {
+            // Unterminated reference: keep the text as-is
+            result.push_str(&prefix);
+            rest = after;
+            break;
+        }
+    }
+    result.push_str(rest);
+    result
+}
+
+/// Resolve `${containerEnv:KEY}` (and `${containerEnv:KEY:default}`) references
+/// against a host-side map (e.g. the already-processed `containerEnv` entries).
+/// Unmatched keys fall through to the generic (host-based)
+/// `expand_container_env_vars`. Pass `skip` to avoid self-references (a key
+/// resolving against its own value).
+pub fn expand_container_env_from_map(
+    input: &str,
+    env_map: &HashMap<String, String>,
+    skip: Option<&str>,
+) -> String {
+    let mut result = input.to_string();
+    for (k, v) in env_map {
+        if skip == Some(k.as_str()) {
+            continue;
+        }
+        let pat = format!("${{containerEnv:{k}}}");
+        if result.contains(&pat) {
+            result = result.replace(&pat, v);
+        }
+        let pat_default = format!("${{containerEnv:{k}:");
+        if result.contains(&pat_default) {
+            result = replace_container_env_default(&result, k, v);
+        }
+    }
+    result
+}
+
+/// Expand `${PREFIX:VAR[:default]}` references from the host environment.
+/// Unmatched references are left untouched. Both `localEnv` and `containerEnv`
+/// use the same semantics; `containerEnv` refs fall back to the host only when
+/// the container-side value is unknown (documented deviation).
+fn expand_env_vars(input: &str, prefix: &str) -> String {
     let mut result = String::new();
     let mut chars = input.chars().peekable();
 
@@ -811,8 +1097,9 @@ fn expand_local_env_vars(input: &str) -> String {
                 }
                 var_content.push(nc);
             }
-            if found_end && var_content.starts_with("localEnv:") {
-                let rest = &var_content["localEnv:".len()..];
+            let tag = format!("{prefix}:");
+            if found_end && var_content.starts_with(&tag) {
+                let rest = &var_content[tag.len()..];
                 let (var_name, default_val) = if let Some(colon_pos) = rest.find(':') {
                     (&rest[..colon_pos], Some(&rest[colon_pos + 1..]))
                 } else {
@@ -820,7 +1107,7 @@ fn expand_local_env_vars(input: &str) -> String {
                 };
                 if var_name.is_empty() {
                     eprintln!(
-                        "Warning: '${{localEnv:}}' has an empty variable name, resolved to empty"
+                        "Warning: '${{{prefix}:}}' has an empty variable name, resolved to empty"
                     );
                 }
                 let env_val = std::env::var(var_name)
@@ -840,6 +1127,14 @@ fn expand_local_env_vars(input: &str) -> String {
     }
 
     result
+}
+
+fn expand_container_env_vars(input: &str) -> String {
+    expand_env_vars(input, "containerEnv")
+}
+
+fn expand_local_env_vars(input: &str) -> String {
+    expand_env_vars(input, "localEnv")
 }
 
 pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
@@ -890,6 +1185,7 @@ pub fn exec_in_container(
     command: &[String],
     env: Option<&HashMap<String, String>>,
     workspace_folder: Option<&Path>,
+    container_env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
     if !container_running(container_name)? {
         return Err(BondarError::Docker(format!(
@@ -915,11 +1211,18 @@ pub fn exec_in_container(
 
     if let Some(env_map) = env {
         for (k, v) in env_map {
-            let expanded_v = if let Some(ws) = workspace_folder {
-                let target = workdir.unwrap_or("/workspace");
-                expand_vars_for_host_with_target(v, ws, target)
+            // Resolve ${containerEnv:KEY} references from the original value
+            // against the containerEnv map before generic expansion
+            let from_map = if let Some(ce) = container_env {
+                expand_container_env_from_map(v, ce, None)
             } else {
                 v.clone()
+            };
+            let expanded_v = if let Some(ws) = workspace_folder {
+                let target = workdir.unwrap_or("/workspace");
+                expand_vars_for_host_with_target(&from_map, ws, target)
+            } else {
+                from_map
             };
             cmd.arg("-e").arg(format!("{k}={expanded_v}"));
         }
@@ -934,6 +1237,7 @@ pub fn exec_in_container(
 
     if !status.success() {
         let code = status.code().unwrap_or(1);
+        crate::lifecycle::reap_children();
         std::process::exit(code);
     }
 
@@ -961,12 +1265,18 @@ mod tests {
 
     #[test]
     fn test_publish_port_arg_number() {
-        assert_eq!(publish_port_arg("8080"), Some("8080:8080".to_string()));
+        assert_eq!(
+            publish_port_arg("8080"),
+            Some("0.0.0.0:8080:8080".to_string())
+        );
     }
 
     #[test]
     fn test_publish_port_arg_host_container() {
-        assert_eq!(publish_port_arg("8080:80"), Some("8080:80".to_string()));
+        assert_eq!(
+            publish_port_arg("8080:80"),
+            Some("0.0.0.0:8080:80".to_string())
+        );
     }
 
     #[test]
@@ -1025,11 +1335,11 @@ mod tests {
     fn test_publish_port_arg_range() {
         assert_eq!(
             publish_port_arg("8080-8085"),
-            Some("8080-8085:8080-8085".to_string())
+            Some("0.0.0.0:8080-8085:8080-8085".to_string())
         );
         assert_eq!(
             publish_port_arg("8080-8085:8080-8085"),
-            Some("8080-8085:8080-8085".to_string())
+            Some("0.0.0.0:8080-8085:8080-8085".to_string())
         );
         assert_eq!(
             publish_port_arg("127.0.0.1:8080-8085"),
@@ -1038,7 +1348,7 @@ mod tests {
         // Host range with single container port
         assert_eq!(
             publish_port_arg("8080-8085:8080"),
-            Some("8080-8085:8080".to_string())
+            Some("0.0.0.0:8080-8085:8080".to_string())
         );
     }
 
@@ -1046,10 +1356,137 @@ mod tests {
     fn test_is_port_or_range() {
         assert!(is_port_or_range("8080"));
         assert!(is_port_or_range("8080-8085"));
+        assert!(is_port_or_range("0"));
         assert!(!is_port_or_range("8080-"));
         assert!(!is_port_or_range("-8080"));
         assert!(!is_port_or_range("abc"));
         assert!(!is_port_or_range("8080-8085-8090"));
+    }
+
+    #[test]
+    fn test_validate_port_spec() {
+        assert!(validate_port_spec("8080").is_ok());
+        assert!(validate_port_spec("8080-8085").is_ok());
+        assert!(validate_port_spec("8080:80").is_ok());
+        assert!(validate_port_spec("127.0.0.1:9090").is_ok());
+        assert!(validate_port_spec("127.0.0.1:8080:80").is_ok());
+        assert!(validate_port_spec("[::1]:8080").is_ok());
+        assert!(validate_port_spec("[::1]:8080:80").is_ok());
+        assert!(validate_port_spec("db:5432").is_ok());
+        assert!(validate_port_spec("0:8080").is_ok());
+        assert!(validate_port_spec("8080/udp").is_ok());
+        assert!(validate_port_spec("8080-8085:8080-8085").is_ok());
+
+        assert!(validate_port_spec("").is_err());
+        assert!(validate_port_spec("0").is_err());
+        assert!(validate_port_spec("65536").is_err());
+        assert!(validate_port_spec("8080-").is_err());
+        assert!(validate_port_spec("8080:abc").is_err());
+        assert!(validate_port_spec("8080-8085-8090").is_err());
+        assert!(validate_port_spec("[::1]").is_err());
+        assert!(validate_port_spec("[::1]:0").is_err());
+    }
+
+    #[test]
+    fn test_resolve_container_env_value() {
+        let raw = HashMap::from([
+            ("A".to_string(), "x".to_string()),
+            ("B".to_string(), "${containerEnv:A}-y".to_string()),
+        ]);
+        assert_eq!(resolve_container_env_value("${containerEnv:A}", &raw), "x");
+        assert_eq!(
+            resolve_container_env_value("${containerEnv:B}", &raw),
+            "x-y"
+        );
+        // Default form resolves against the map value, not the default
+        assert_eq!(
+            resolve_container_env_value("${containerEnv:A:fallback}", &raw),
+            "x"
+        );
+        // Unmatched keys keep the default for the generic expansion
+        assert_eq!(
+            resolve_container_env_value("${containerEnv:C:fallback}", &raw),
+            "${containerEnv:C:fallback}"
+        );
+        // Self-reference is left untouched (falls through to host env)
+        assert_eq!(
+            resolve_container_env_value("${containerEnv:C}", &raw),
+            "${containerEnv:C}"
+        );
+        // Cycle is bounded, no hang
+        let cyclic = HashMap::from([
+            ("X".to_string(), "${containerEnv:Y}".to_string()),
+            ("Y".to_string(), "${containerEnv:X}".to_string()),
+        ]);
+        let _ = resolve_container_env_value("${containerEnv:X}", &cyclic);
+    }
+
+    #[test]
+    fn test_validate_port_spec_host_side() {
+        assert!(validate_port_spec("0:8080").is_ok());
+        assert!(validate_port_spec("65535:65535").is_ok());
+        // Host-side reversed range is rejected
+        assert!(validate_port_spec("8085-8080:8080").is_err());
+        // Host-side out-of-range is rejected
+        assert!(validate_port_spec("70000:8080").is_err());
+        // Service names pass
+        assert!(validate_port_spec("db:5432").is_ok());
+        // Three-part forms require an IPv4 bind address
+        assert!(validate_port_spec("8080:80:90").is_err());
+        assert!(validate_port_spec("localhost:8080:80").is_err());
+        assert!(validate_port_spec("127.0.0.1:8080:80").is_ok());
+        // IPv6 forms with stray colons are rejected
+        assert!(validate_port_spec("[::1]:8080:").is_err());
+        assert!(validate_port_spec("[::1]:8080:80:").is_err());
+        assert!(validate_port_spec("[::1]").is_err());
+    }
+
+    #[test]
+    fn test_publish_ipv6_trailing_colon_rejected() {
+        assert_eq!(publish_port_arg("[::1]:8080:"), None);
+        assert_eq!(publish_port_arg("[::1]:8080:80:"), None);
+    }
+
+    #[test]
+    fn test_attributes_entry_range_key() {
+        let attrs = serde_json::json!({
+            "8080-8085": {"protocol": "udp"}
+        });
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(attrs),
+            ..Default::default()
+        };
+        // Port inside the range matches the range key
+        assert!(is_udp_port(&cfg, "8082"));
+        assert!(is_udp_port(&cfg, "8080"));
+        assert!(is_udp_port(&cfg, "8085"));
+        // Outside the range does not match
+        assert!(!is_udp_port(&cfg, "8086"));
+        assert!(!is_udp_port(&cfg, "8079"));
+    }
+
+    #[test]
+    fn test_is_port_ignored_range_key() {
+        let attrs = serde_json::json!({
+            "9000-9010": {"onAutoForward": "ignore"}
+        });
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(attrs),
+            ..Default::default()
+        };
+        assert!(is_port_ignored(&cfg, "9005"));
+        assert!(!is_port_ignored(&cfg, "9011"));
+    }
+
+    #[test]
+    fn test_compose_project_name() {
+        let ws = std::path::Path::new("/home/user/proj");
+        let a = compose_project_name(ws);
+        let b = compose_project_name(ws);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 15);
+        let other = compose_project_name(std::path::Path::new("/home/user/other"));
+        assert_ne!(a, other);
     }
 
     #[test]
@@ -1110,8 +1547,11 @@ mod tests {
     #[test]
     fn test_expand_vars_for_host_default_target() {
         let ws = std::path::Path::new("/home/user/proj");
-        let expanded =
-            expand_vars_for_host("${localWorkspaceFolder}|${containerWorkspaceFolder}", ws);
+        let expanded = expand_vars_for_host_with_target(
+            "${localWorkspaceFolder}|${containerWorkspaceFolder}",
+            ws,
+            "/workspace",
+        );
         assert_eq!(expanded, "/home/user/proj|/workspace");
     }
 
@@ -1151,6 +1591,25 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_container_env_from_map() {
+        let map = HashMap::from([("A".to_string(), "x".to_string())]);
+        assert_eq!(
+            expand_container_env_from_map("${containerEnv:A}-y", &map, None),
+            "x-y"
+        );
+        // Default form resolves against the map value, not the default
+        assert_eq!(
+            expand_container_env_from_map("${containerEnv:A:fb}", &map, None),
+            "x"
+        );
+        // Unmatched keys fall through untouched (resolved later from host)
+        assert_eq!(
+            expand_container_env_from_map("${containerEnv:UNSET:fb}", &map, None),
+            "${containerEnv:UNSET:fb}"
+        );
+    }
+
+    #[test]
     fn test_expand_env_vars_empty_default() {
         assert_eq!(expand_local_env_vars("${localEnv:UNSET_VAR_XYZ_123:}"), "");
         assert_eq!(
@@ -1174,6 +1633,19 @@ mod tests {
         assert!(!is_udp_port(&cfg, "9090"));
         let plain = DevContainerConfig::default();
         assert!(!is_udp_port(&plain, "3000"));
+    }
+
+    #[test]
+    fn test_is_udp_port_with_udp_suffix() {
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(serde_json::json!({
+                "3000": {"protocol": "udp"}
+            })),
+            ..Default::default()
+        };
+        // /udp suffix must still match the plain port key in attributes
+        assert!(is_udp_port(&cfg, "3000/udp"));
+        assert!(is_udp_port(&cfg, "127.0.0.1:3000/udp"));
     }
 
     #[test]
@@ -1218,8 +1690,15 @@ mod tests {
 
     #[test]
     fn test_publish_port_arg_zero() {
-        assert_eq!(publish_port_arg("0"), Some("0:0".to_string()));
-        assert_eq!(publish_port_arg("0:0"), Some("0:0".to_string()));
+        // Container-side port 0 is rejected (docker would treat it as a random port)
+        assert_eq!(publish_port_arg("0"), None);
+        assert_eq!(publish_port_arg("0:0"), None);
+        assert_eq!(publish_port_arg("8080:0"), None);
+        // Host-side 0 selects a random host port
+        assert_eq!(
+            publish_port_arg("0:8080"),
+            Some("0.0.0.0:0:8080".to_string())
+        );
     }
 
     #[test]
@@ -1384,11 +1863,15 @@ mod tests {
     fn test_publish_port_arg_udp_suffix() {
         assert_eq!(
             publish_port_arg("8080:8080/udp"),
-            Some("8080:8080/udp".to_string())
+            Some("0.0.0.0:8080:8080/udp".to_string())
         );
         assert_eq!(
             publish_port_arg("8080/udp"),
-            Some("8080:8080/udp".to_string())
+            Some("0.0.0.0:8080:8080/udp".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("127.0.0.1:9090/udp"),
+            Some("127.0.0.1:9090:9090/udp".to_string())
         );
     }
 

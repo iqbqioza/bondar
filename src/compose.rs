@@ -26,16 +26,30 @@ fn compose_files_args(
         ComposeFileValue::Single(s) => vec![s.clone()],
         ComposeFileValue::Multiple(v) => v.clone(),
     };
+    // Variable expansion uses the compose workspace folder (default "/" per spec)
+    let container_target = config
+        .workspace_folder
+        .clone()
+        .unwrap_or_else(|| "/".to_string());
     let mut args = Vec::new();
     for f in files {
         // Variable expansion is relative to the workspace root
         // (e.g. ${localWorkspaceFolder}), while path resolution is
         // relative to the devcontainer.json directory.
-        let expanded = crate::docker::expand_vars_for_host(&f, workspace_folder);
+        let expanded = crate::docker::expand_vars_for_host_with_target(
+            &f,
+            workspace_folder,
+            &container_target,
+        );
         let path = config_dir.join(&expanded);
-        let path_str = path.to_string_lossy().to_string();
+        if !path.exists() {
+            eprintln!("Warning: compose file not found: {}", path.display());
+        }
+        let path_str = path.to_str().ok_or_else(|| {
+            BondarError::Config("Compose file path is not valid UTF-8".to_string())
+        })?;
         args.push("-f".to_string());
-        args.push(path_str);
+        args.push(path_str.to_string());
     }
     Ok(args)
 }
@@ -74,9 +88,14 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
         return None;
     }
     let source = source.unwrap_or_default();
-    // A relative bind source (not ./ or /) becomes a named volume in the
+    // A relative bind source (not ./, / or .) becomes a named volume in the
     // compose short syntax - warn about the behavioral difference
-    if is_bind && !source.is_empty() && !source.starts_with('/') && !source.starts_with("./") {
+    if is_bind
+        && !source.is_empty()
+        && !source.starts_with('/')
+        && !source.starts_with("./")
+        && source != "."
+    {
         eprintln!(
             "Warning: bind mount source '{source}' is relative; compose short syntax will treat it as a named volume"
         );
@@ -120,11 +139,12 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 );
                 continue;
             }
-            let entry = if crate::docker::is_udp_port(config, &port_str) {
-                format!("\"{publish}/udp\"")
-            } else {
-                format!("\"{publish}\"")
-            };
+            let entry =
+                if crate::docker::is_udp_port(config, &port_str) && !publish.ends_with("/udp") {
+                    format!("\"{publish}/udp\"")
+                } else {
+                    format!("\"{publish}\"")
+                };
             if !ports.contains(&entry) {
                 ports.push(entry);
             }
@@ -147,7 +167,8 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 continue;
             }
             if let Some(publish) = crate::docker::publish_port_arg(&p) {
-                let entry = if crate::docker::is_udp_port(config, &p) {
+                let entry = if crate::docker::is_udp_port(config, &p) && !publish.ends_with("/udp")
+                {
                     format!("\"{publish}/udp\"")
                 } else {
                     format!("\"{publish}\"")
@@ -173,10 +194,23 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                     &container_target,
                 );
                 if let Some(vol) = mount_string_to_compose_volume(&expanded) {
-                    volumes.push(vol);
+                    if volumes.contains(&vol) {
+                        eprintln!(
+                            "Warning: mount '{vol}' is declared more than once; keeping the first entry"
+                        );
+                    } else {
+                        volumes.push(vol);
+                    }
                 }
             }
             MountValue::Object(obj) => {
+                // tmpfs mounts have no short-syntax equivalent in compose
+                if obj.mount_type.as_deref() == Some("tmpfs") {
+                    eprintln!(
+                        "Warning: tmpfs mount is skipped in compose override (no short-syntax equivalent)"
+                    );
+                    continue;
+                }
                 if let Some(target) = &obj.target {
                     let mut vol = String::new();
                     if let Some(source) = &obj.source {
@@ -197,7 +231,13 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                     if obj.readonly.unwrap_or(false) {
                         vol.push_str(":ro");
                     }
-                    volumes.push(vol);
+                    if volumes.contains(&vol) {
+                        eprintln!(
+                            "Warning: mount '{vol}' is declared more than once; keeping the first entry"
+                        );
+                    } else {
+                        volumes.push(vol);
+                    }
                 }
             }
         }
@@ -207,18 +247,26 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     // Build env lines first so an empty `environment:` key is never emitted
     // (e.g. when secrets contain only file-path entries that cannot be resolved).
     let mut env_lines: Vec<(String, String)> = Vec::new();
+    // ${containerEnv:KEY} references resolve against the raw containerEnv entries
     for (k, v) in &config.container_env {
-        let expanded =
-            crate::docker::expand_vars_for_host_with_target(v, workspace_folder, &container_target);
+        let resolved = crate::docker::resolve_container_env_value(v, &config.container_env);
+        let expanded = crate::docker::expand_vars_for_host_with_target(
+            &resolved,
+            workspace_folder,
+            &container_target,
+        );
         env_lines.push((k.clone(), expanded));
     }
     for (k, v) in crate::docker::resolve_secrets(config) {
-        if env_lines.iter().any(|(ek, _)| ek == &k) {
+        // Replace an existing entry (docker/compose semantics: last one wins)
+        if let Some(entry) = env_lines.iter_mut().find(|(ek, _)| ek == &k) {
             eprintln!(
                 "Warning: secret key '{k}' conflicts with an existing environment entry and will override it"
             );
+            entry.1 = v;
+        } else {
+            env_lines.push((k, v));
         }
-        env_lines.push((k, v));
     }
     // Deterministic output: sort keys so the generated YAML is stable
     env_lines.sort_by(|a, b| a.0.cmp(&b.0));
@@ -252,51 +300,90 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         return Ok(PathBuf::new());
     }
 
-    let basename = workspace_folder
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace");
-    let override_path = std::env::temp_dir().join(format!("bondar-{basename}-override.yml"));
-    std::fs::write(&override_path, yaml).map_err(BondarError::Io)?;
+    // Per-workspace unique name so workspaces with the same basename do not
+    // clobber each other's override file.
+    let project = crate::docker::compose_project_name(workspace_folder);
+    let override_path = std::env::temp_dir().join(format!("{project}-override.yml"));
+    write_override_file(&override_path, yaml)?;
     Ok(override_path)
+}
+
+/// Write the override file with owner-only permissions (it may contain
+/// resolved secret values).
+fn write_override_file(path: &Path, contents: String) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(BondarError::Io)?;
+        f.write_all(contents.as_bytes()).map_err(BondarError::Io)?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents).map_err(BondarError::Io)?;
+    }
+    Ok(())
 }
 
 fn compose_base_command(
     config: &DevContainerConfig,
     config_path: &Path,
     workspace_folder: &Path,
-) -> Result<Command> {
+) -> Result<(Command, Option<PathBuf>)> {
     let mut cmd = Command::new("docker");
     cmd.arg("compose");
+    cmd.arg("--project-name")
+        .arg(crate::docker::compose_project_name(workspace_folder));
     for arg in compose_files_args(config, config_path, workspace_folder)? {
         cmd.arg(arg);
     }
-    if let Ok(override_path) = write_compose_override(config, workspace_folder)
-        && !override_path.as_os_str().is_empty()
-    {
-        cmd.arg("-f").arg(override_path);
+    let override_path = write_compose_override(config, workspace_folder)?;
+    if !override_path.as_os_str().is_empty() {
+        cmd.arg("-f").arg(&override_path);
     }
-    Ok(cmd)
+    Ok((
+        cmd,
+        if override_path.as_os_str().is_empty() {
+            None
+        } else {
+            Some(override_path)
+        },
+    ))
 }
 
 fn port_value_to_string(p: &crate::config::PortValue) -> String {
-    match p {
-        crate::config::PortValue::Number(n) => n.to_string(),
-        crate::config::PortValue::Text(s) => s.clone(),
-    }
+    crate::docker::port_value_to_string(p)
 }
 
 fn escape_yaml_value(input: &str) -> String {
-    input
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-        .replace('\t', "\\t")
+    let mut out = String::with_capacity(input.len());
+    for c in input.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            // `$$` renders a literal `$` in compose, preventing `${VAR}` expansion
+            '$' => out.push_str("$$"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            // Other control characters have no double-quoted shortcut
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn escape_yaml_key(input: &str) -> String {
+    let all_digits = !input.is_empty() && input.chars().all(|c| c.is_ascii_digit());
     if !input.is_empty()
+        && !all_digits
         && input
             .chars()
             .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
@@ -315,7 +402,7 @@ pub fn compose_up(
     no_build: bool,
 ) -> Result<()> {
     println!("Starting Docker Compose services...");
-    let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
+    let (mut cmd, override_path) = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("up");
     cmd.arg("-d");
     if remove_existing {
@@ -324,7 +411,13 @@ pub fn compose_up(
     if no_build {
         cmd.arg("--no-build");
     }
+    // The primary service is always started (it is the dev container itself);
+    // runServices adds further services on top.
     let mut seen_services = std::collections::HashSet::new();
+    if let Some(primary) = &config.service {
+        seen_services.insert(primary.clone());
+        cmd.arg(primary);
+    }
     for s in &config.run_services {
         if seen_services.insert(s.clone()) {
             cmd.arg(s);
@@ -332,23 +425,12 @@ pub fn compose_up(
             eprintln!("Warning: duplicate runServices entry '{s}', skipping");
         }
     }
-    if config.run_services.is_empty()
-        && let Some(services) = config.extra.get("runServices").and_then(|v| v.as_array())
-    {
-        // Legacy fallback for configs parsed before run_services existed
-        for s in services {
-            if let Some(name) = s.as_str()
-                && seen_services.insert(name.to_string())
-            {
-                cmd.arg(name);
-            }
-        }
-    }
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     let status = cmd
         .status()
         .map_err(|e| BondarError::Docker(format!("Failed to run docker compose up: {e}")))?;
+    cleanup_override(override_path);
     if !status.success() {
         return Err(BondarError::Docker("docker compose up failed".to_string()));
     }
@@ -364,13 +446,14 @@ pub fn compose_down(
     // - unset (default): tear down services (remove)
     // - "none": do nothing
     // - "stopCompose": stop services but keep them
+    // - "stopContainer": stop the primary container but keep it
     let shutdown = config.shutdown_action.as_deref().unwrap_or("remove");
     if shutdown == "none" {
         println!("shutdownAction is 'none', skipping compose down");
         return Ok(());
     }
 
-    let action = if shutdown == "stopCompose" {
+    let action = if shutdown == "stopCompose" || shutdown == "stopContainer" {
         "stop"
     } else {
         "down"
@@ -386,19 +469,26 @@ pub fn compose_down(
     }
 
     println!("Running 'docker compose {action}'...");
-    let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
+    let (mut cmd, override_path) = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg(action);
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     let status = cmd
         .status()
         .map_err(|e| BondarError::Docker(format!("Failed to run docker compose {action}: {e}")))?;
+    cleanup_override(override_path);
     if !status.success() {
         return Err(BondarError::Docker(format!(
             "docker compose {action} failed"
         )));
     }
     Ok(())
+}
+
+fn cleanup_override(override_path: Option<PathBuf>) {
+    if let Some(p) = override_path {
+        let _ = std::fs::remove_file(&p);
+    }
 }
 
 pub fn get_service_container_id(
@@ -410,7 +500,7 @@ pub fn get_service_container_id(
         .service
         .as_deref()
         .ok_or_else(|| BondarError::Config("No service specified".to_string()))?;
-    let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
+    let (mut cmd, override_path) = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("ps");
     cmd.arg("-q");
     cmd.arg(service);
@@ -418,6 +508,7 @@ pub fn get_service_container_id(
     let output = cmd
         .output()
         .map_err(|e| BondarError::Docker(format!("Failed to run docker compose ps: {e}")))?;
+    cleanup_override(override_path);
     if !output.status.success() {
         return Err(BondarError::Docker("docker compose ps failed".to_string()));
     }
@@ -487,7 +578,7 @@ pub fn compose_exec(
                 .to_string(),
         )
     })?;
-    let mut cmd = compose_base_command(config, config_path, workspace_folder)?;
+    let (mut cmd, override_path) = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("exec");
     if let Some(u) = user {
         cmd.arg("--user").arg(u);
@@ -496,10 +587,32 @@ pub fn compose_exec(
         cmd.arg("-w").arg(w);
     }
     if let Some(env_map) = env {
+        // Resolve ${containerEnv:KEY} references against the containerEnv map
+        let container_env_map: std::collections::HashMap<String, String> = config
+            .container_env
+            .iter()
+            .map(|(k, v)| {
+                let target = workdir.unwrap_or("/");
+                let resolved = crate::docker::resolve_container_env_value(v, &config.container_env);
+                (
+                    k.clone(),
+                    crate::docker::expand_vars_for_host_with_target(
+                        &resolved,
+                        workspace_folder,
+                        target,
+                    ),
+                )
+            })
+            .collect();
         for (k, v) in env_map {
             let target = workdir.unwrap_or("/");
-            let expanded =
-                crate::docker::expand_vars_for_host_with_target(v, workspace_folder, target);
+            let from_map =
+                crate::docker::expand_container_env_from_map(v, &container_env_map, None);
+            let expanded = crate::docker::expand_vars_for_host_with_target(
+                &from_map,
+                workspace_folder,
+                target,
+            );
             cmd.arg("-e").arg(format!("{k}={expanded}"));
         }
     }
@@ -515,8 +628,10 @@ pub fn compose_exec(
     let status = cmd
         .status()
         .map_err(|e| BondarError::Docker(format!("Failed to run docker compose exec: {e}")))?;
+    cleanup_override(override_path);
     if !status.success() {
         let code = status.code().unwrap_or(1);
+        crate::lifecycle::reap_children();
         std::process::exit(code);
     }
     Ok(())
@@ -529,7 +644,7 @@ pub fn check_compose_available() -> Result<()> {
         .map_err(|e| BondarError::Docker(format!("Failed to run docker compose: {e}")))?;
     if !output.status.success() {
         return Err(BondarError::Docker(
-            "docker compose not available".to_string(),
+            "docker compose is not available; enable the compose plugin (docker compose version) or upgrade Docker".to_string(),
         ));
     }
     Ok(())
@@ -615,7 +730,7 @@ mod tests {
         assert_eq!(escape_yaml_value("plain"), "plain");
         assert_eq!(escape_yaml_value("a\tb\rc"), "a\\tb\\rc");
         assert_eq!(escape_yaml_value(""), "");
-        assert_eq!(escape_yaml_value("a$b"), "a$b");
+        assert_eq!(escape_yaml_value("a$b"), "a$$b");
     }
 
     #[test]
@@ -623,8 +738,44 @@ mod tests {
         assert_eq!(escape_yaml_key("MY_VAR-1"), "MY_VAR-1");
         assert_eq!(escape_yaml_key("weird key"), "\"weird key\"");
         assert_eq!(escape_yaml_key(""), "\"\"");
-        assert_eq!(escape_yaml_key("123"), "123");
+        // Digit-only keys are quoted so YAML does not parse them as numbers
+        assert_eq!(escape_yaml_key("123"), "\"123\"");
         assert_eq!(escape_yaml_key("key:with:colon"), "\"key:with:colon\"");
+    }
+
+    #[test]
+    fn test_escape_yaml_control_chars() {
+        assert_eq!(escape_yaml_value("a\u{07}b"), "a\\x07b");
+        assert_eq!(escape_yaml_value("a\tb\rc\nd"), "a\\tb\\rc\\nd");
+        assert_eq!(escape_yaml_value("a\"b\\c"), "a\\\"b\\\\c");
+        assert_eq!(escape_yaml_value("a$b"), "a$$b");
+    }
+
+    #[test]
+    fn test_escape_yaml_value_dollar() {
+        assert_eq!(escape_yaml_value("a${VAR}b"), "a$${VAR}b");
+        assert_eq!(escape_yaml_value("plain"), "plain");
+        assert_eq!(escape_yaml_value("a\"b$"), "a\\\"b$$");
+    }
+
+    #[test]
+    fn test_tmpfs_object_mount_skipped_in_override() {
+        let dir = std::env::temp_dir().join("bondar-ovr-test4");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            mounts: vec![MountValue::Object(MountObject {
+                source: None,
+                target: Some("/tmp".to_string()),
+                mount_type: Some("tmpfs".to_string()),
+                readonly: None,
+            })],
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        assert!(path.as_os_str().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -658,7 +809,7 @@ mod tests {
         let path = write_compose_override(&cfg, &dir).unwrap();
         assert!(!path.as_os_str().is_empty());
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("- \"8080:8080\""));
+        assert!(content.contains("- \"0.0.0.0:8080:8080\""));
         assert!(content.contains("- \"/host:/data:ro\""));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
@@ -708,7 +859,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("  app:"));
         assert!(content.contains("FOO: \"bar\""));
-        assert!(content.contains("- \"8080:8080\""));
+        assert!(content.contains("- \"0.0.0.0:8080:8080\""));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -724,6 +875,82 @@ mod tests {
         };
         let path = write_compose_override(&cfg, &dir).unwrap();
         assert!(path.as_os_str().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_override_filename_unique_per_workspace() {
+        let dir_a = std::env::temp_dir().join("bondar-ovr-same-name");
+        let dir_b = std::env::temp_dir()
+            .join("nested")
+            .join("bondar-ovr-same-name");
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(dir_b.parent().unwrap());
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            container_env: HashMap::from([("A".to_string(), "1".to_string())]),
+            ..Default::default()
+        };
+        let path_a = write_compose_override(&cfg, &dir_a).unwrap();
+        let path_b = write_compose_override(&cfg, &dir_b).unwrap();
+        // Same basename but different paths must not share the override file
+        assert_ne!(path_a, path_b);
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+        let _ = std::fs::remove_dir_all(&dir_a);
+        let _ = std::fs::remove_dir_all(dir_b.parent().unwrap());
+    }
+
+    #[test]
+    fn test_override_file_owner_only_permissions() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = std::env::temp_dir().join("bondar-ovr-perms");
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let cfg = DevContainerConfig {
+                service: Some("app".to_string()),
+                container_env: HashMap::from([("SEC".to_string(), "v".to_string())]),
+                ..Default::default()
+            };
+            let path = write_compose_override(&cfg, &dir).unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            // Override files may contain resolved secrets: owner-only access
+            assert_eq!(mode & 0o777, 0o600, "override file must be 0600");
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn test_override_secret_overrides_env_entry() {
+        let dir = std::env::temp_dir().join("bondar-ovr-secret-dup");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("BONDAR_TEST_OVR_DUP_SECRET", "secret-val");
+        }
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            container_env: HashMap::from([("DUP".to_string(), "env-val".to_string())]),
+            secrets: Some(HashMap::from([(
+                "DUP".to_string(),
+                serde_json::json!({"localEnv": "BONDAR_TEST_OVR_DUP_SECRET"}),
+            )])),
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        // The secret must replace the env entry, not duplicate the key
+        assert_eq!(content.matches("DUP:").count(), 1);
+        assert!(content.contains("DUP: \"secret-val\""));
+        unsafe {
+            std::env::remove_var("BONDAR_TEST_OVR_DUP_SECRET");
+        }
+        let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
