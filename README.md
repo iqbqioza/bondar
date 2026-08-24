@@ -26,8 +26,17 @@ A standalone development container command, as an alternative to the [Dev Contai
 ```sh
 # Install the latest release binary (no sudo required)
 curl -fsSL https://raw.githubusercontent.com/iqbqioza/bondar/main/install.sh | sh
+```
 
-# Or build from source
+Windows (PowerShell, no admin required):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+Or build from source:
+
+```sh
 cargo build --release
 # add target/release/bondar to your PATH
 ```
