@@ -190,7 +190,9 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     } else {
         cfg.workspace_folder_or_default()
     };
-    // Container env and remote env (null remoteEnv entries are skipped)
+    // Container env and remote env (null remoteEnv entries are skipped).
+    // ${containerEnv:KEY} references resolve against the raw containerEnv
+    // entries (same semantics as `docker run`), then generic expansion applies.
     let all_env: Vec<(&String, Option<&str>)> = cfg
         .container_env
         .iter()
@@ -201,33 +203,9 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         let Some(val) = v else {
             continue;
         };
-        let expanded = docker::expand_vars_for_host_with_target(val, ws, &target);
+        let resolved = docker::resolve_container_env_value(val, &cfg.container_env);
+        let expanded = docker::expand_vars_for_host_with_target(&resolved, ws, &target);
         env.insert((*k).clone(), Value::String(expanded));
-    }
-    // Resolve ${containerEnv:KEY} references from the original values against
-    // the containerEnv entries (same approach as docker run)
-    let container_env_map: std::collections::HashMap<String, String> = cfg
-        .container_env
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.clone(),
-                docker::expand_vars_for_host_with_target(v, ws, &target),
-            )
-        })
-        .collect();
-    for (k, v) in &all_env {
-        let Some(val) = v else {
-            continue;
-        };
-        let skip = if cfg.container_env.contains_key(*k) {
-            Some((*k).as_str())
-        } else {
-            None
-        };
-        let from_map = docker::expand_container_env_from_map(val, &container_env_map, skip);
-        let resolved = docker::expand_vars_for_host_with_target(&from_map, ws, &target);
-        env.insert((*k).clone(), Value::String(resolved));
     }
     // Secret values are never printed; only their key names are listed.
     let secret_names: Vec<String> = cfg

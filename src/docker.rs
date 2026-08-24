@@ -389,6 +389,17 @@ pub fn create_and_start_container(
     let workspace_folder_str = workspace_folder.to_string_lossy().to_string();
     let workspace_target = config.workspace_folder_or_default();
 
+    // The workspace path is embedded in --mount/--label values; ',' breaks the
+    // docker --mount parser and '=' breaks label filters.
+    if workspace_folder_str.contains(',') {
+        eprintln!(
+            "Warning: workspace path contains ',', which breaks docker --mount parsing; the workspace mount will fail"
+        );
+    }
+    if workspace_folder_str.contains('=') {
+        eprintln!("Warning: workspace path contains '=', which breaks docker label filters");
+    }
+
     let mut cmd = Command::new("docker");
     cmd.arg("run");
     cmd.arg("-d");
@@ -1039,10 +1050,11 @@ fn replace_container_env_default(input: &str, key: &str, value: &str) -> String 
     result
 }
 
-/// Resolve `${containerEnv:KEY}` references against a host-side map (e.g. the
-/// already-processed `containerEnv` entries). Unmatched keys fall through to
-/// the generic (host-based) `expand_container_env_vars`. Pass `skip` to avoid
-/// self-references (a key resolving against its own value).
+/// Resolve `${containerEnv:KEY}` (and `${containerEnv:KEY:default}`) references
+/// against a host-side map (e.g. the already-processed `containerEnv` entries).
+/// Unmatched keys fall through to the generic (host-based)
+/// `expand_container_env_vars`. Pass `skip` to avoid self-references (a key
+/// resolving against its own value).
 pub fn expand_container_env_from_map(
     input: &str,
     env_map: &HashMap<String, String>,
@@ -1053,7 +1065,14 @@ pub fn expand_container_env_from_map(
         if skip == Some(k.as_str()) {
             continue;
         }
-        result = result.replace(&format!("${{containerEnv:{k}}}"), v);
+        let pat = format!("${{containerEnv:{k}}}");
+        if result.contains(&pat) {
+            result = result.replace(&pat, v);
+        }
+        let pat_default = format!("${{containerEnv:{k}:");
+        if result.contains(&pat_default) {
+            result = replace_container_env_default(&result, k, v);
+        }
     }
     result
 }
@@ -1611,6 +1630,11 @@ mod tests {
         assert_eq!(
             expand_container_env_from_map("${containerEnv:A}-y", &map, None),
             "x-y"
+        );
+        // Default form resolves against the map value, not the default
+        assert_eq!(
+            expand_container_env_from_map("${containerEnv:A:fb}", &map, None),
+            "x"
         );
         // Unmatched keys fall through untouched (resolved later from host)
         assert_eq!(
