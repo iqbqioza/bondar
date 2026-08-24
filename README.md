@@ -1,5 +1,9 @@
 # bondar
 
+<p align="center">
+  <img src="docs/images/bondar-small.png" alt="bondar logo" width="200">
+</p>
+
 A standalone development container command, as an alternative to `devcontainer`.
 
 - No dependency on Node.js, VSCode Server, or other Microsoft-related tools (single Rust binary)
