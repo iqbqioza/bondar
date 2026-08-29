@@ -60,6 +60,12 @@ if [ -z "${HOME:-}" ]; then
     exit 1
 fi
 
+# Validate TMPDIR if set (must be a writable directory)
+if [ -n "${TMPDIR:-}" ] && [ ! -d "${TMPDIR}" ]; then
+    echo "error: TMPDIR is set to '${TMPDIR}' but is not a directory" >&2
+    exit 1
+fi
+
 # --- tooling ----------------------------------------------------------------
 
 download() { # url output_file
