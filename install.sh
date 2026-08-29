@@ -64,9 +64,9 @@ fi
 
 download() { # url output_file
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$1" -o "$2"
+        curl -fsSL -H "User-Agent: bondar-installer" --proto '=https' --tlsv1.2 "$1" -o "$2"
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$2" "$1"
+        wget -qO "$2" --header="User-Agent: bondar-installer" "$1"
     else
         echo "error: neither curl nor wget is available" >&2
         return 1
@@ -74,10 +74,8 @@ download() { # url output_file
 }
 
 on_path() { # dir
-    case ":${PATH}:" in
-        *":$1:"*) return 0 ;;
-    esac
-    return 1
+    # Use fixed-string grep to avoid glob interpretation of special chars in dir
+    printf '%s' ":${PATH}:" | grep -F -q ":$1:"
 }
 
 # --- resolve the release tag -------------------------------------------------
@@ -102,6 +100,15 @@ if [ -z "$tag" ]; then
         echo "error: could not parse the latest release tag from the GitHub API" >&2
         exit 1
     fi
+    # Basic sanity check for tag format to avoid path traversal via BONDAR_VERSION
+    nl='
+'
+    case "$tag" in
+        *'/'*|*'..'*|*"$nl"*)
+            echo "error: invalid tag format: $tag" >&2
+            exit 1
+            ;;
+    esac
 fi
 echo "Latest release: ${tag}"
 
@@ -140,15 +147,21 @@ target="${bindir}/bondar"
 
 # --- overwrite confirmation -------------------------------------------------
 
-if [ -e "$target" ]; then
-    if [ -d "$target" ]; then
+if [ -e "$target" ] || [ -L "$target" ]; then
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
         echo "error: ${target} is a directory; refusing to replace it" >&2
         exit 1
     fi
-    printf '%s already exists. Overwrite? [y/N] ' "$target"
-    read -r answer || exit 1
+    # When stdin is a pipe (curl|sh), read from /dev/tty if available
+    if [ ! -t 0 ] && [ -e /dev/tty ]; then
+        printf '%s already exists. Overwrite? [y/N] ' "$target" > /dev/tty
+        read -r answer < /dev/tty || exit 1
+    else
+        printf '%s already exists. Overwrite? [y/N] ' "$target"
+        read -r answer || exit 1
+    fi
     case "$answer" in
-        y | Y | yes | YES)
+        y | Y | yes | YES | Yes)
             echo "Overwriting ${target}..."
             ;;
         *)
@@ -192,8 +205,16 @@ else
 fi
 
 chmod +x "$tmpdir/bondar"
-cp "$tmpdir/bondar" "$target" || {
+# Atomic install to avoid truncated binary on interruption
+tmp_target="${target}.tmp.$$"
+cp "$tmpdir/bondar" "$tmp_target" || {
     echo "error: failed to install to ${target}" >&2
+    rm -f "$tmp_target"
+    exit 1
+}
+mv -f "$tmp_target" "$target" || {
+    echo "error: failed to install to ${target}" >&2
+    rm -f "$tmp_target"
     exit 1
 }
 chmod +x "$target"

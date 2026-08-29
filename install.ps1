@@ -90,12 +90,18 @@ try {
     # Checksum verification (best effort; SHA256SUMS ships with the release)
     try {
         Invoke-WebRequest -Uri "$base/$tag/SHA256SUMS" -OutFile (Join-Path $tmpDir 'SHA256SUMS') -UseBasicParsing
-        $expected = (Get-Content -LiteralPath (Join-Path $tmpDir 'SHA256SUMS') | Select-Object -First 1) -split '\s+' | Select-Object -First 1
+        $line = Get-Content -LiteralPath (Join-Path $tmpDir 'SHA256SUMS') | Select-String -SimpleMatch $Asset | Select-Object -First 1
+        $expected = if ($line) { ($line.ToString() -split '\s+')[0] } else { $null }
         $actual = (Get-FileHash -LiteralPath (Join-Path $tmpDir 'bondar.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-        if ($expected -and $actual -ne $expected.ToLowerInvariant()) {
+        if (-not $expected) {
+            Write-Host 'Warning: SHA256SUMS does not contain an entry for this asset; skipping checksum verification.' -ForegroundColor Yellow
+        }
+        elseif ($actual -ne $expected.ToLowerInvariant()) {
             throw "Checksum verification failed for $Asset."
         }
-        Write-Host 'Checksum verified.'
+        else {
+            Write-Host 'Checksum verified.'
+        }
     }
     catch {
         if ($_.Exception.Message -match '^Checksum') { throw }
