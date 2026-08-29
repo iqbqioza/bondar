@@ -174,7 +174,7 @@ fn has_gpu() -> bool {
 }
 
 fn parse_size(s: &str) -> Option<u64> {
-    let lower = s.to_ascii_lowercase();
+    let lower = s.trim().to_ascii_lowercase();
     let (num_str, mult) = if lower.ends_with("tb") {
         (&lower[..lower.len() - 2], 1024u64.pow(4))
     } else if lower.ends_with("gb") {
@@ -185,7 +185,7 @@ fn parse_size(s: &str) -> Option<u64> {
         (&lower[..lower.len() - 2], 1024)
     } else {
         // Unitless values are bytes (the schema pattern allows e.g. "0" or "1024")
-        return lower.trim().parse::<u64>().ok();
+        return lower.parse::<u64>().ok();
     };
     let num: f64 = num_str.trim().parse().ok()?;
     Some((num * mult as f64) as u64)

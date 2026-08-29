@@ -230,10 +230,15 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
     // Fallback: docker pull (works for features that are also container images).
     // Feature IDs are valid image references (e.g. ghcr.io/devcontainers/features/common-utils:2),
     // so the full ID is used to keep the requested tag/version.
+    if id.starts_with('-') {
+        return Err(BondarError::Config(format!(
+            "Feature id '{id}' must not start with '-'"
+        )));
+    }
     let feature_image = id;
     println!("  Trying 'docker pull {feature_image}' as fallback");
     let (ok, stderr) = run_output(
-        std::process::Command::new("docker").args(["pull", feature_image]),
+        std::process::Command::new("docker").args(["pull", "--", feature_image]),
         "docker pull",
     )?;
     if ok {
@@ -244,7 +249,7 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
             BondarError::Config("Feature cache path is not valid UTF-8".to_string())
         })?;
         let created = std::process::Command::new("docker")
-            .args(["create", "--name", &tmp_name, feature_image])
+            .args(["create", "--name", &tmp_name, "--", feature_image])
             .status()
             .map(|s| s.success())
             .unwrap_or(false);

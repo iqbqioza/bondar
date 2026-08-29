@@ -175,11 +175,14 @@ if download "${DOWNLOAD_BASE}/${tag}/SHA256SUMS" "$tmpdir/SHA256SUMS" 2>/dev/nul
     else
         sum=""
     fi
-    if [ -n "$sum" ] && ! grep -q "$sum" "$tmpdir/SHA256SUMS"; then
+    if [ -z "$sum" ]; then
+        echo "warning: no sha256sum/shasum found; skipping checksum verification" >&2
+    elif ! grep -q -- "$sum" "$tmpdir/SHA256SUMS"; then
         echo "error: checksum verification failed for ${asset}" >&2
         exit 1
+    else
+        echo "Checksum verified."
     fi
-    echo "Checksum verified."
 else
     echo "warning: SHA256SUMS not found for ${tag}; skipping checksum verification" >&2
 fi
