@@ -139,8 +139,9 @@ fn available_memory_bytes() -> Option<u64> {
 
 #[cfg(unix)]
 fn available_storage_bytes(path: &Path) -> Option<u64> {
+    // Use POSIX output (-P) for stable column order across locales
     let output = std::process::Command::new("df")
-        .arg("-k")
+        .args(["-k", "-P"])
         .arg(path)
         .output()
         .ok()?;
@@ -171,6 +172,7 @@ fn has_gpu() -> bool {
         .map(|o| o.status.success())
         .unwrap_or(false)
         || (cfg!(unix) && Path::new("/dev/nvidia0").exists())
+        || (cfg!(unix) && Path::new("/dev/dri").exists())
 }
 
 fn parse_size(s: &str) -> Option<u64> {
