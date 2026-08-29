@@ -211,7 +211,7 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         };
         let resolved = docker::resolve_container_env_value(val, &cfg.container_env);
         let expanded = docker::expand_vars_for_host_with_target(&resolved, ws, &target);
-        let value = if secret_values.contains(&expanded) {
+        let value = if secret_values.iter().any(|s| expanded.contains(s)) {
             "***".to_string()
         } else {
             expanded
