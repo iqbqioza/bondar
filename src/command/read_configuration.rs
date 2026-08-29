@@ -199,13 +199,24 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         .map(|(k, v)| (k, Some(v.as_str())))
         .chain(cfg.remote_env.iter().map(|(k, v)| (k, v.as_deref())))
         .collect();
+    // Collect secret values to avoid leaking them via ${localEnv:} expansion in
+    // containerEnv/remoteEnv (e.g. "TOKEN": "${localEnv:SECRET_TOKEN}")
+    let secret_values: std::collections::HashSet<String> = docker::resolve_secrets(cfg)
+        .into_iter()
+        .map(|(_, v)| v)
+        .collect();
     for (k, v) in &all_env {
         let Some(val) = v else {
             continue;
         };
         let resolved = docker::resolve_container_env_value(val, &cfg.container_env);
         let expanded = docker::expand_vars_for_host_with_target(&resolved, ws, &target);
-        env.insert((*k).clone(), Value::String(expanded));
+        let value = if secret_values.contains(&expanded) {
+            "***".to_string()
+        } else {
+            expanded
+        };
+        env.insert((*k).clone(), Value::String(value));
     }
     // Secret values are never printed; only their key names are listed.
     let secret_names: Vec<String> = cfg

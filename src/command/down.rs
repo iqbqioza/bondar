@@ -53,6 +53,7 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             println!("Container {container_name} removed");
         }
         _ => {
+            eprintln!("Warning: unknown shutdownAction '{shutdown}'; treating as remove");
             if !docker::container_exists(&container_name)? {
                 println!("Container {container_name} does not exist");
                 return Ok(());
