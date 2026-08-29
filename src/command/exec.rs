@@ -56,9 +56,15 @@ pub fn run(
         .filter(|u| !u.is_empty())
         .or_else(|| cfg.remote_user.clone())
         .or_else(|| cfg.container_user.clone());
-    let exec_workdir = workdir
-        .filter(|w| !w.is_empty())
-        .or(cfg.workspace_folder.clone());
+    let exec_workdir = workdir.filter(|w| !w.is_empty()).or_else(|| {
+        Some(if cfg.docker_compose_file.is_some() {
+            cfg.workspace_folder
+                .clone()
+                .unwrap_or_else(|| "/".to_string())
+        } else {
+            cfg.workspace_folder_or_default()
+        })
+    });
 
     let env = merged_exec_env(&cfg, &container_name, exec_user.as_deref());
     let default_target = cfg.workspace_folder_or_default();
