@@ -397,6 +397,16 @@ impl DevContainerConfig {
                 "'service' must not be empty".to_string(),
             ));
         }
+        if let Some(action) = &self.shutdown_action {
+            let valid = ["none", "stopContainer", "stopCompose"];
+            if !valid.contains(&action.as_str()) {
+                return Err(BondarError::Config(format!(
+                    "'shutdownAction' must be one of 'none', 'stopContainer', 'stopCompose', got '{action}'"
+                )));
+            }
+            // Cross-mode validation: warn but allow alias; strict schema will catch
+            // mismatched values (e.g. stopCompose on non-compose) as schema error
+        }
         for key in self.container_env.keys().chain(self.remote_env.keys()) {
             if key.trim().is_empty() {
                 return Err(BondarError::Config(
