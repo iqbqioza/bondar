@@ -70,6 +70,7 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/bondar${{ runner.os == 'Windows' && '.exe' || '' }} dist/${{ matrix.artifact }}
+          cp LICENSE dist/ 2>/dev/null || true
           cp README.md dist/ 2>/dev/null || true
 
       - name: Upload artifact

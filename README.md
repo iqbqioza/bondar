@@ -104,3 +104,7 @@ A verification workspace is available under `sample/`. Note that
 `sample/.devcontainer/devcontainer.json` sets `remoteUser: "vscode"`; when that
 user is not present in the image, bondar creates it automatically via
 `updateRemoteUserUID` (the `useradd` fallback) during `bondar up`.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
