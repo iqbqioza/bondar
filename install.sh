@@ -91,7 +91,11 @@ if [ -z "$tag" ]; then
         echo "error: failed to query the latest release from GitHub" >&2
         exit 1
     fi
-    tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmpjson" | head -n 1)
+    if command -v python3 >/dev/null 2>&1; then
+        tag=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('tag_name',''))" "$tmpjson" 2>/dev/null || true)
+    else
+        tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmpjson" | head -n 1)
+    fi
     rm -f "$tmpjson"
     trap - EXIT
     if [ -z "$tag" ]; then

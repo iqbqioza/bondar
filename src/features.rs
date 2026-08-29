@@ -102,7 +102,32 @@ pub fn handle_features_with_container(
             }
         }
     } else {
-        let sorted = sort_by_installs_after(feat_map);
+        // Merge installsAfter from cached feature metadata (if any) into the
+        // ordering map, so a feature's own `installsAfter` is honored even
+        // before it is fetched.
+        let mut ordered_map = (*feat_map).clone();
+        for id in feat_map.keys() {
+            let dir = feature_cache_dir().join(sanitize_id(id));
+            if let Some(meta) = read_feature_metadata(&dir)
+                && let Some(arr) = meta.get("installsAfter").and_then(|v| v.as_array())
+            {
+                let entry = ordered_map
+                    .entry(id.clone())
+                    .or_insert(serde_json::json!({}));
+                let needs_insert = entry.get("installsAfter").is_none();
+                if needs_insert {
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert(
+                            "installsAfter".to_string(),
+                            serde_json::Value::Array(arr.clone()),
+                        );
+                    } else {
+                        *entry = serde_json::json!({ "installsAfter": arr.clone() });
+                    }
+                }
+            }
+        }
+        let sorted = sort_by_installs_after(&ordered_map);
         println!("Installing features in installsAfter order:");
         for id in sorted {
             if let Some(opts) = feat_map.get(&id) {
