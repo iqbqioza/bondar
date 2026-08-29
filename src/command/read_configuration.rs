@@ -309,6 +309,10 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     merged.insert("runArgs".into(), json!(cfg.run_args));
     merged.insert("appPort".into(), json!(cfg.app_port));
     merged.insert("customizations".into(), json!(cfg.customizations));
+    merged.insert("build".into(), json!(cfg.build));
+    merged.insert("dockerFile".into(), json!(cfg.docker_file));
+    merged.insert("dockerComposeFile".into(), json!(cfg.docker_compose_file));
+    merged.insert("service".into(), json!(cfg.service));
     merged.insert("hostRequirements".into(), json!(cfg.host_requirements));
     merged.insert("userEnvProbe".into(), json!(cfg.user_env_probe));
     // containerName only applies to image/Dockerfile configs; compose
