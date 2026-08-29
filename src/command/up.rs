@@ -24,10 +24,10 @@ pub fn run(
     let ws = docker::get_workspace_folder(workspace_folder)?;
     let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
-    if no_build && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
+    if no_build && !cfg.effective_has_build() && cfg.docker_compose_file.is_none() {
         eprintln!("Warning: --no-build has no effect (no 'build' section configured)");
     }
-    if no_cache && cfg.build.is_none() && cfg.docker_compose_file.is_none() {
+    if no_cache && !cfg.effective_has_build() && cfg.docker_compose_file.is_none() {
         eprintln!("Warning: --no-cache has no effect (no 'build' section configured)");
     }
 
@@ -104,9 +104,9 @@ pub fn run(
 
     let image_name = docker::resolve_image_name(&cfg, &ws)?;
 
-    if cfg.build.is_some() && !no_build {
+    if cfg.effective_has_build() && !no_build {
         docker::build_image(&cfg, &cfg_path, &ws, &image_name, no_cache)?;
-    } else if cfg.build.is_some() {
+    } else if cfg.effective_has_build() {
         println!("Skipping image build (--no-build)");
     }
 
@@ -316,9 +316,10 @@ fn wait_index(wait: &Option<String>) -> usize {
         "postCreateCommand",
         "postStartCommand",
     ];
-    wait.as_ref()
-        .and_then(|w| ORDER.iter().position(|&x| x == w))
-        .unwrap_or(usize::MAX)
+    match wait {
+        None => 2, // Spec default is "updateContentCommand"
+        Some(w) => ORDER.iter().position(|&x| x == w).unwrap_or(usize::MAX),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -390,6 +391,9 @@ fn run_compose(
         // Force rebuild with no cache for compose
         let mut build_cmd = std::process::Command::new("docker");
         build_cmd.arg("compose");
+        build_cmd
+            .arg("--project-name")
+            .arg(docker::compose_project_name(ws));
         for arg in crate::compose::compose_files_args_for_build(cfg, cfg_path, ws)? {
             build_cmd.arg(arg);
         }
@@ -413,28 +417,30 @@ fn run_compose(
 
     let service = cfg.service.as_deref().unwrap_or("service");
     // When the container name cannot be resolved, docker exec based steps
-    // (UID sync, features) cannot run; skip them instead of executing against
-    // a guessed name.
-    let resolved_container = crate::compose::get_service_container_name(cfg, cfg_path, ws);
-    match &resolved_container {
+    // (UID sync, features, lifecycle) cannot run; skip them instead of
+    // executing against a guessed name (e.g. bare service name).
+    let container_name = match crate::compose::get_service_container_name(cfg, cfg_path, ws) {
         Ok(name) => {
-            host::handle_update_remote_user_uid(cfg, name)?;
+            host::handle_update_remote_user_uid(cfg, &name)?;
             if newly_created {
                 crate::features::handle_features_with_container(
                     &cfg.features,
                     &cfg.override_feature_install_order,
-                    Some(name),
+                    Some(&name),
                     cfg.remote_user.as_deref(),
                 )?;
             }
+            name
         }
         Err(e) => {
             eprintln!(
-                "Warning: could not resolve service container name ({e}); skipping UID sync and feature installation"
+                "Warning: could not resolve service container name ({e}); skipping UID sync, feature installation and lifecycle hooks"
             );
+            println!("Compose service {service} is up (container name could not be resolved)");
+            println!("  Workspace: {}", ws.display());
+            return Ok(());
         }
-    }
-    let container_name = resolved_container.unwrap_or_else(|_| service.to_string());
+    };
 
     let workspace_target = cfg
         .workspace_folder
@@ -445,9 +451,10 @@ fn run_compose(
         .container_env
         .iter()
         .map(|(k, v)| {
+            let resolved = crate::docker::resolve_container_env_value(v, &cfg.container_env);
             (
                 k.clone(),
-                crate::docker::expand_vars_for_host_with_target(v, ws, &workspace_target),
+                crate::docker::expand_vars_for_host_with_target(&resolved, ws, &workspace_target),
             )
         })
         .collect();
@@ -592,7 +599,7 @@ mod tests {
             usize::MAX
         );
         assert_eq!(wait_index(&Some("bogus".to_string())), usize::MAX);
-        assert_eq!(wait_index(&None), usize::MAX);
+        assert_eq!(wait_index(&None), 2);
         assert_eq!(wait_index(&Some(String::new())), usize::MAX);
     }
 }

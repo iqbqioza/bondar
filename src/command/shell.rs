@@ -20,7 +20,13 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             .remote_user
             .clone()
             .or_else(|| cfg.container_user.clone());
-        let workdir = cfg.workspace_folder.clone();
+        let workdir = Some(if cfg.docker_compose_file.is_some() {
+            cfg.workspace_folder
+                .clone()
+                .unwrap_or_else(|| "/".to_string())
+        } else {
+            cfg.workspace_folder_or_default()
+        });
         let env = crate::command::exec::compose_exec_env(&cfg, &cfg_path, &ws, user.as_deref());
         return crate::compose::compose_exec(
             &cfg,

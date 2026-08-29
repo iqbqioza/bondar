@@ -199,13 +199,24 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         .map(|(k, v)| (k, Some(v.as_str())))
         .chain(cfg.remote_env.iter().map(|(k, v)| (k, v.as_deref())))
         .collect();
+    // Collect secret values to avoid leaking them via ${localEnv:} expansion in
+    // containerEnv/remoteEnv (e.g. "TOKEN": "${localEnv:SECRET_TOKEN}")
+    let secret_values: std::collections::HashSet<String> = docker::resolve_secrets(cfg)
+        .into_iter()
+        .map(|(_, v)| v)
+        .collect();
     for (k, v) in &all_env {
         let Some(val) = v else {
             continue;
         };
         let resolved = docker::resolve_container_env_value(val, &cfg.container_env);
         let expanded = docker::expand_vars_for_host_with_target(&resolved, ws, &target);
-        env.insert((*k).clone(), Value::String(expanded));
+        let value = if secret_values.iter().any(|s| expanded.contains(s)) {
+            "***".to_string()
+        } else {
+            expanded
+        };
+        env.insert((*k).clone(), Value::String(value));
     }
     // Secret values are never printed; only their key names are listed.
     let secret_names: Vec<String> = cfg
@@ -276,6 +287,34 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     merged.insert("runServices".into(), json!(cfg.run_services));
     merged.insert("shutdownAction".into(), json!(cfg.shutdown_action));
     merged.insert("waitFor".into(), json!(cfg.wait_for));
+    merged.insert("privileged".into(), json!(cfg.privileged));
+    merged.insert("capAdd".into(), json!(cfg.cap_add));
+    merged.insert("securityOpt".into(), json!(cfg.security_opt));
+    merged.insert("init".into(), json!(cfg.init));
+    merged.insert("overrideCommand".into(), json!(cfg.override_command));
+    merged.insert(
+        "updateRemoteUserUID".into(),
+        json!(cfg.update_remote_user_uid),
+    );
+    merged.insert(
+        "otherPortsAttributes".into(),
+        json!(cfg.other_ports_attributes),
+    );
+    merged.insert("portsAttributes".into(), json!(cfg.ports_attributes));
+    merged.insert(
+        "overrideFeatureInstallOrder".into(),
+        json!(cfg.override_feature_install_order),
+    );
+    merged.insert("workspaceMount".into(), json!(cfg.workspace_mount));
+    merged.insert("runArgs".into(), json!(cfg.run_args));
+    merged.insert("appPort".into(), json!(cfg.app_port));
+    merged.insert("customizations".into(), json!(cfg.customizations));
+    merged.insert("build".into(), json!(cfg.build));
+    merged.insert("dockerFile".into(), json!(cfg.docker_file));
+    merged.insert("dockerComposeFile".into(), json!(cfg.docker_compose_file));
+    merged.insert("service".into(), json!(cfg.service));
+    merged.insert("hostRequirements".into(), json!(cfg.host_requirements));
+    merged.insert("userEnvProbe".into(), json!(cfg.user_env_probe));
     // containerName only applies to image/Dockerfile configs; compose
     // containers are named by the per-workspace compose project.
     if cfg.docker_compose_file.is_none() {

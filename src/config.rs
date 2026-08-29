@@ -17,6 +17,12 @@ pub struct DevContainerConfig {
     #[serde(default)]
     pub build: Option<BuildConfig>,
 
+    #[serde(rename = "dockerFile", alias = "dockerfile", default)]
+    pub docker_file: Option<String>,
+
+    #[serde(rename = "context", default)]
+    pub top_context: Option<String>,
+
     #[serde(rename = "dockerComposeFile", default)]
     pub docker_compose_file: Option<ComposeFileValue>,
 
@@ -52,6 +58,9 @@ pub struct DevContainerConfig {
 
     #[serde(rename = "remoteUser", default)]
     pub remote_user: Option<String>,
+
+    #[serde(rename = "containerName", default)]
+    pub container_name_override: Option<String>,
 
     #[serde(rename = "containerUser", default)]
     pub container_user: Option<String>,
@@ -128,7 +137,7 @@ pub struct DevContainerConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildConfig {
-    #[serde(default)]
+    #[serde(default, alias = "dockerFile")]
     pub dockerfile: Option<String>,
     #[serde(default)]
     pub context: Option<String>,
@@ -197,15 +206,35 @@ pub enum PortValue {
 }
 
 impl DevContainerConfig {
+    pub fn effective_has_build(&self) -> bool {
+        self.build.is_some() || self.docker_file.is_some()
+    }
+
+    pub fn effective_dockerfile(&self) -> Option<String> {
+        self.build
+            .as_ref()
+            .and_then(|b| b.dockerfile.clone())
+            .or_else(|| self.docker_file.clone())
+    }
+
+    pub fn effective_context(&self) -> Option<String> {
+        self.build
+            .as_ref()
+            .and_then(|b| b.context.clone())
+            .or_else(|| self.top_context.clone())
+    }
+
     pub fn validate(&self) -> Result<()> {
-        if self.image.is_none() && self.build.is_none() && self.docker_compose_file.is_none() {
+        let has_build = self.effective_has_build();
+        if self.image.is_none() && !has_build && self.docker_compose_file.is_none() {
             return Err(BondarError::Config(
-                "Either 'image', 'build' or 'dockerComposeFile' must be specified".to_string(),
+                "Either 'image', 'build'/'dockerFile' or 'dockerComposeFile' must be specified"
+                    .to_string(),
             ));
         }
-        if self.image.is_some() && self.build.is_some() {
+        if self.image.is_some() && has_build {
             return Err(BondarError::Config(
-                "'image' and 'build' cannot both be specified".to_string(),
+                "'image' and 'build'/'dockerFile' cannot both be specified".to_string(),
             ));
         }
         if let Some(n) = &self.name {
@@ -219,17 +248,32 @@ impl DevContainerConfig {
                 ));
             }
         }
+        if let Some(cn) = &self.container_name_override {
+            if cn.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'containerName' must not be empty".to_string(),
+                ));
+            }
+            if !cn
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+                || !cn.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+            {
+                return Err(BondarError::Config(
+                    "'containerName' must match '[a-zA-Z0-9][a-zA-Z0-9_.-]*'".to_string(),
+                ));
+            }
+        }
         if let Some(img) = &self.image
             && img.trim().is_empty()
         {
             return Err(BondarError::Config("'image' must not be empty".to_string()));
         }
-        if let Some(build) = &self.build
-            && let Some(df) = &build.dockerfile
+        if let Some(df) = self.effective_dockerfile()
             && df.trim().is_empty()
         {
             return Err(BondarError::Config(
-                "'build.dockerfile' must not be empty".to_string(),
+                "'build.dockerfile'/'dockerFile' must not be empty".to_string(),
             ));
         }
         if self.docker_compose_file.is_some() && self.service.is_none() {
@@ -237,9 +281,10 @@ impl DevContainerConfig {
                 "'service' must be specified when using 'dockerComposeFile'".to_string(),
             ));
         }
-        if self.docker_compose_file.is_some() && (self.image.is_some() || self.build.is_some()) {
+        if self.docker_compose_file.is_some() && (self.image.is_some() || has_build) {
             return Err(BondarError::Config(
-                "'dockerComposeFile' cannot be combined with 'image' or 'build'".to_string(),
+                "'dockerComposeFile' cannot be combined with 'image' or 'build'/'dockerFile'"
+                    .to_string(),
             ));
         }
         if self.workspace_mount.is_some() && self.workspace_folder.is_none() {
@@ -352,6 +397,16 @@ impl DevContainerConfig {
                 "'service' must not be empty".to_string(),
             ));
         }
+        if let Some(action) = &self.shutdown_action {
+            let valid = ["none", "stopContainer", "stopCompose"];
+            if !valid.contains(&action.as_str()) {
+                return Err(BondarError::Config(format!(
+                    "'shutdownAction' must be one of 'none', 'stopContainer', 'stopCompose', got '{action}'"
+                )));
+            }
+            // Cross-mode validation: warn but allow alias; strict schema will catch
+            // mismatched values (e.g. stopCompose on non-compose) as schema error
+        }
         for key in self.container_env.keys().chain(self.remote_env.keys()) {
             if key.trim().is_empty() {
                 return Err(BondarError::Config(
@@ -444,6 +499,9 @@ impl DevContainerConfig {
     }
 
     pub fn container_name(&self, workspace_path: &Path) -> String {
+        if let Some(explicit) = &self.container_name_override {
+            return explicit.clone();
+        }
         if let Some(name) = &self.name {
             let sanitized: String = name
                 .chars()

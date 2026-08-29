@@ -102,7 +102,32 @@ pub fn handle_features_with_container(
             }
         }
     } else {
-        let sorted = sort_by_installs_after(feat_map);
+        // Merge installsAfter from cached feature metadata (if any) into the
+        // ordering map, so a feature's own `installsAfter` is honored even
+        // before it is fetched.
+        let mut ordered_map = (*feat_map).clone();
+        for id in feat_map.keys() {
+            let dir = feature_cache_dir().join(sanitize_id(id));
+            if let Some(meta) = read_feature_metadata(&dir)
+                && let Some(arr) = meta.get("installsAfter").and_then(|v| v.as_array())
+            {
+                let entry = ordered_map
+                    .entry(id.clone())
+                    .or_insert(serde_json::json!({}));
+                let needs_insert = entry.get("installsAfter").is_none();
+                if needs_insert {
+                    if let Some(obj) = entry.as_object_mut() {
+                        obj.insert(
+                            "installsAfter".to_string(),
+                            serde_json::Value::Array(arr.clone()),
+                        );
+                    } else {
+                        *entry = serde_json::json!({ "installsAfter": arr.clone() });
+                    }
+                }
+            }
+        }
+        let sorted = sort_by_installs_after(&ordered_map);
         println!("Installing features in installsAfter order:");
         for id in sorted {
             if let Some(opts) = feat_map.get(&id) {
@@ -230,10 +255,15 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
     // Fallback: docker pull (works for features that are also container images).
     // Feature IDs are valid image references (e.g. ghcr.io/devcontainers/features/common-utils:2),
     // so the full ID is used to keep the requested tag/version.
+    if id.starts_with('-') {
+        return Err(BondarError::Config(format!(
+            "Feature id '{id}' must not start with '-'"
+        )));
+    }
     let feature_image = id;
     println!("  Trying 'docker pull {feature_image}' as fallback");
     let (ok, stderr) = run_output(
-        std::process::Command::new("docker").args(["pull", feature_image]),
+        std::process::Command::new("docker").args(["pull", "--", feature_image]),
         "docker pull",
     )?;
     if ok {
@@ -244,7 +274,7 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
             BondarError::Config("Feature cache path is not valid UTF-8".to_string())
         })?;
         let created = std::process::Command::new("docker")
-            .args(["create", "--name", &tmp_name, feature_image])
+            .args(["create", "--name", &tmp_name, "--", feature_image])
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
@@ -553,20 +583,36 @@ fn install_feature(
         eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
         return Ok(());
     }
-    if !opts.is_object() && !opts.is_null() {
-        eprintln!(
-            "Warning: feature '{id}' options must be an object, got {opts}; ignoring options"
-        );
-    }
+    // String value is shorthand for version: "features": {"id": "18"} -> "id:18"
+    let (effective_id, effective_opts) = if let Some(v) = opts.as_str() {
+        if id.contains(':') {
+            eprintln!(
+                "Warning: feature '{id}' already contains a version, ignoring string option '{v}'"
+            );
+            (id.to_string(), opts)
+        } else {
+            (
+                format!("{id}:{v}"),
+                &serde_json::Value::Null as &serde_json::Value,
+            )
+        }
+    } else {
+        if !opts.is_object() && !opts.is_null() {
+            eprintln!(
+                "Warning: feature '{id}' options must be an object, got {opts}; ignoring options"
+            );
+        }
+        (id.to_string(), opts)
+    };
 
-    println!("Attempting to install feature '{id}' with opts {opts}...");
+    println!("Attempting to install feature '{effective_id}' with opts {effective_opts}...");
 
-    let dest_dir = feature_cache_dir().join(sanitize_id(id));
+    let dest_dir = feature_cache_dir().join(sanitize_id(&effective_id));
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         eprintln!("  Warning: could not create feature directory: {e}");
         return Ok(());
     }
-    if let Err(e) = fetch_feature(id, &dest_dir) {
+    if let Err(e) = fetch_feature(&effective_id, &dest_dir) {
         // Avoid stale metadata from a previous failed/partial fetch
         let _ = std::fs::remove_dir_all(&dest_dir);
         return Err(e);
@@ -601,15 +647,21 @@ fn install_feature(
     }
 
     if let Some(container) = container_name {
-        let container_path = format!("/tmp/bondar_features/{}", sanitize_id(id));
+        let container_path = format!("/tmp/bondar_features/{}", sanitize_id(&effective_id));
         if let Err(e) = copy_feature_into_container(&dest_dir, container, &container_path) {
             eprintln!("  Warning: could not copy feature into container: {e}");
             return Ok(());
         }
-        install_in_container(id, opts, container, &container_path, container_user)?;
+        install_in_container(
+            &effective_id,
+            effective_opts,
+            container,
+            &container_path,
+            container_user,
+        )?;
     } else {
         println!(
-            "  Feature {id} fetched to {}. Execution requires a running container (use 'bondar up' first).",
+            "  Feature {effective_id} fetched to {}. Execution requires a running container (use 'bondar up' first).",
             dest_dir.display()
         );
     }

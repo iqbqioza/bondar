@@ -28,12 +28,12 @@ pub fn run(
         if follow {
             cmd.arg("-f");
         }
-        if let Some(t) = &tail
-            && (t == "all" || t.parse::<usize>().is_ok())
-        {
-            cmd.arg("--tail").arg(t);
-        } else if let Some(t) = &tail {
-            eprintln!("Warning: invalid --tail value '{t}', ignoring");
+        if let Some(t) = &tail {
+            if is_valid_tail(t) {
+                cmd.arg("--tail").arg(t);
+            } else {
+                eprintln!("Warning: invalid --tail value '{t}', ignoring");
+            }
         }
         if let Some(service) = &cfg.service {
             cmd.arg(service);
@@ -64,12 +64,12 @@ pub fn run(
     if follow {
         cmd.arg("-f");
     }
-    if let Some(t) = &tail
-        && (t == "all" || t.parse::<usize>().is_ok())
-    {
-        cmd.arg("--tail").arg(t);
-    } else if let Some(t) = &tail {
-        eprintln!("Warning: invalid --tail value '{t}', ignoring");
+    if let Some(t) = &tail {
+        if is_valid_tail(t) {
+            cmd.arg("--tail").arg(t);
+        } else {
+            eprintln!("Warning: invalid --tail value '{t}', ignoring");
+        }
     }
     cmd.arg(&container_name);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
@@ -80,4 +80,8 @@ pub fn run(
         return Err(BondarError::Docker("docker logs failed".to_string()));
     }
     Ok(())
+}
+
+fn is_valid_tail(t: &str) -> bool {
+    t == "all" || t.parse::<usize>().is_ok()
 }

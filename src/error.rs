@@ -21,7 +21,15 @@ impl fmt::Display for BondarError {
     }
 }
 
-impl std::error::Error for BondarError {}
+impl std::error::Error for BondarError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::Json(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 
 impl From<std::io::Error> for BondarError {
     fn from(e: std::io::Error) -> Self {

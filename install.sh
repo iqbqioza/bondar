@@ -64,9 +64,9 @@ fi
 
 download() { # url output_file
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$1" -o "$2"
+        curl -fsSL -H "User-Agent: bondar-installer" --proto '=https' --tlsv1.2 "$1" -o "$2"
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$2" "$1"
+        wget -qO "$2" --header="User-Agent: bondar-installer" "$1"
     else
         echo "error: neither curl nor wget is available" >&2
         return 1
@@ -74,10 +74,9 @@ download() { # url output_file
 }
 
 on_path() { # dir
-    case ":${PATH}:" in
-        *":$1:"*) return 0 ;;
-    esac
-    return 1
+    # Use fixed-string grep and handle trailing slashes (PATH may contain /foo vs /foo/)
+    dir=${1%/}
+    printf '%s' ":${PATH}:" | grep -F -q ":$dir:" || printf '%s' ":${PATH}:" | grep -F -q ":$dir/:"
 }
 
 # --- resolve the release tag -------------------------------------------------
@@ -91,13 +90,26 @@ if [ -z "$tag" ]; then
         echo "error: failed to query the latest release from GitHub" >&2
         exit 1
     fi
-    tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmpjson" | head -n 1)
+    if command -v python3 >/dev/null 2>&1; then
+        tag=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('tag_name',''))" "$tmpjson" 2>/dev/null || true)
+    else
+        tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$tmpjson" | head -n 1)
+    fi
     rm -f "$tmpjson"
     trap - EXIT
     if [ -z "$tag" ]; then
         echo "error: could not parse the latest release tag from the GitHub API" >&2
         exit 1
     fi
+    # Basic sanity check for tag format to avoid path traversal via BONDAR_VERSION
+    nl='
+'
+    case "$tag" in
+        *'/'*|*'..'*|*"$nl"*)
+            echo "error: invalid tag format: $tag" >&2
+            exit 1
+            ;;
+    esac
 fi
 echo "Latest release: ${tag}"
 
@@ -136,15 +148,21 @@ target="${bindir}/bondar"
 
 # --- overwrite confirmation -------------------------------------------------
 
-if [ -e "$target" ]; then
-    if [ -d "$target" ]; then
+if [ -e "$target" ] || [ -L "$target" ]; then
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
         echo "error: ${target} is a directory; refusing to replace it" >&2
         exit 1
     fi
-    printf '%s already exists. Overwrite? [y/N] ' "$target"
-    read -r answer || exit 1
+    # When stdin is a pipe (curl|sh), read from /dev/tty if available
+    if [ ! -t 0 ] && [ -e /dev/tty ]; then
+        printf '%s already exists. Overwrite? [y/N] ' "$target" > /dev/tty
+        read -r answer < /dev/tty || exit 1
+    else
+        printf '%s already exists. Overwrite? [y/N] ' "$target"
+        read -r answer || exit 1
+    fi
     case "$answer" in
-        y | Y | yes | YES)
+        y | Y | yes | YES | Yes)
             echo "Overwriting ${target}..."
             ;;
         *)
@@ -175,18 +193,37 @@ if download "${DOWNLOAD_BASE}/${tag}/SHA256SUMS" "$tmpdir/SHA256SUMS" 2>/dev/nul
     else
         sum=""
     fi
-    if [ -n "$sum" ] && ! grep -q "$sum" "$tmpdir/SHA256SUMS"; then
+    if [ -z "$sum" ]; then
+        echo "warning: no sha256sum/shasum found; skipping checksum verification" >&2
+    elif ! grep -F -- "$sum" "$tmpdir/SHA256SUMS" | grep -F -q -- "$asset"; then
         echo "error: checksum verification failed for ${asset}" >&2
         exit 1
+    else
+        echo "Checksum verified."
     fi
-    echo "Checksum verified."
 else
-    echo "warning: SHA256SUMS not found for ${tag}; skipping checksum verification" >&2
+    if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+        echo "error: SHA256SUMS not found for ${tag}; cannot verify ${asset} (use BONDAR_INSECURE=1 to skip)" >&2
+        if [ "${BONDAR_INSECURE:-}" != "1" ]; then
+            exit 1
+        fi
+        echo "warning: proceeding without verification due to BONDAR_INSECURE=1" >&2
+    else
+        echo "warning: SHA256SUMS not found for ${tag}; skipping checksum verification" >&2
+    fi
 fi
 
 chmod +x "$tmpdir/bondar"
-cp "$tmpdir/bondar" "$target" || {
+# Atomic install to avoid truncated binary on interruption
+tmp_target="${target}.tmp.$$"
+cp "$tmpdir/bondar" "$tmp_target" || {
     echo "error: failed to install to ${target}" >&2
+    rm -f "$tmp_target"
+    exit 1
+}
+mv -f "$tmp_target" "$target" || {
+    echo "error: failed to install to ${target}" >&2
+    rm -f "$tmp_target"
     exit 1
 }
 chmod +x "$target"

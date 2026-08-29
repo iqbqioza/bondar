@@ -42,18 +42,19 @@ pub fn build_image(
     image_name: &str,
     no_cache: bool,
 ) -> Result<()> {
-    let build = config
-        .build
-        .as_ref()
-        .ok_or_else(|| BondarError::Config("No 'build' section found, cannot build".to_string()))?;
+    if !config.effective_has_build() {
+        return Err(BondarError::Config(
+            "No 'build'/'dockerFile' section found, cannot build".to_string(),
+        ));
+    }
+    let build = config.build.as_ref();
 
     let config_dir = config_path.parent().unwrap_or(workspace_folder);
     // ${containerWorkspaceFolder} in build inputs resolves to the configured
     // workspaceFolder (default "/workspace")
     let workspace_target = config.workspace_folder_or_default();
-    let dockerfile = build
-        .dockerfile
-        .clone()
+    let dockerfile = config
+        .effective_dockerfile()
         .unwrap_or_else(|| "Dockerfile".to_string());
     let dockerfile =
         expand_vars_for_host_with_target(&dockerfile, workspace_folder, &workspace_target);
@@ -66,8 +67,8 @@ pub fn build_image(
         )));
     }
 
-    let context = build
-        .context
+    let context = config
+        .effective_context()
         .as_ref()
         .map(|c| {
             let expanded = expand_vars_for_host_with_target(c, workspace_folder, &workspace_target);
@@ -87,32 +88,38 @@ pub fn build_image(
     cmd.arg("-f").arg(dockerfile_str);
     cmd.arg("-t").arg(image_name);
 
-    for (k, v) in &build.args {
-        let expanded = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
-        cmd.arg("--build-arg").arg(format!("{k}={expanded}"));
-    }
+    if let Some(b) = build {
+        for (k, v) in &b.args {
+            let expanded = expand_vars_for_host_with_target(v, workspace_folder, &workspace_target);
+            cmd.arg("--build-arg").arg(format!("{k}={expanded}"));
+        }
 
-    if let Some(target) = &build.target {
-        cmd.arg("--target").arg(target);
-    }
+        if let Some(target) = &b.target {
+            cmd.arg("--target").arg(target);
+        }
 
-    for opt in &build.options {
-        let expanded = expand_vars_for_host_with_target(opt, workspace_folder, &workspace_target);
-        cmd.arg(&expanded);
-    }
+        for opt in &b.options {
+            let expanded =
+                expand_vars_for_host_with_target(opt, workspace_folder, &workspace_target);
+            cmd.arg(&expanded);
+        }
 
-    if let Some(cache_from) = &build.cache_from {
-        match cache_from {
-            crate::config::CacheFromValue::Single(s) => {
-                let expanded =
-                    expand_vars_for_host_with_target(s, workspace_folder, &workspace_target);
-                cmd.arg("--cache-from").arg(expanded);
-            }
-            crate::config::CacheFromValue::Multiple(vec) => {
-                for s in vec {
+        if let Some(cache_from) = &b.cache_from {
+            match cache_from {
+                crate::config::CacheFromValue::Single(s) => {
                     let expanded =
                         expand_vars_for_host_with_target(s, workspace_folder, &workspace_target);
                     cmd.arg("--cache-from").arg(expanded);
+                }
+                crate::config::CacheFromValue::Multiple(vec) => {
+                    for s in vec {
+                        let expanded = expand_vars_for_host_with_target(
+                            s,
+                            workspace_folder,
+                            &workspace_target,
+                        );
+                        cmd.arg("--cache-from").arg(expanded);
+                    }
                 }
             }
         }
@@ -141,7 +148,7 @@ pub fn build_image(
 }
 
 pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) -> Result<String> {
-    if config.build.is_some() {
+    if config.effective_has_build() {
         let base = if let Some(name) = &config.name {
             let sanitized: String = name
                 .chars()
@@ -1165,11 +1172,14 @@ pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
                     );
                 }
             }
-            serde_json::Value::String(path) => {
-                eprintln!(
-                    "Warning: secret '{key}' uses the file path form '{path}' which is not supported; use {{\"localEnv\": \"VAR\"}} instead"
-                );
-            }
+            serde_json::Value::String(path) => match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    resolved.push((key.clone(), content.trim().to_string()));
+                }
+                Err(e) => {
+                    eprintln!("Warning: secret '{key}' file '{path}' could not be read: {e}");
+                }
+            },
             other => {
                 eprintln!("Warning: secret '{key}' has unsupported format: {other}");
             }

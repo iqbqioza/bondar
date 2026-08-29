@@ -301,24 +301,47 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     }
 
     // Per-workspace unique name so workspaces with the same basename do not
-    // clobber each other's override file.
+    // clobber each other's override file. Add a random suffix and use O_EXCL
+    // to avoid predictable-path symlink attacks.
     let project = crate::docker::compose_project_name(workspace_folder);
-    let override_path = std::env::temp_dir().join(format!("{project}-override.yml"));
+    let override_path = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::process::id().hash(&mut hasher);
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .hash(&mut hasher);
+        workspace_folder.hash(&mut hasher);
+        let rand = format!("{:x}", hasher.finish());
+        std::env::temp_dir().join(format!(
+            "{}-override-{}-{}.yml",
+            project,
+            &rand[..8],
+            std::process::id()
+        ))
+    };
     write_override_file(&override_path, yaml)?;
     Ok(override_path)
 }
 
 /// Write the override file with owner-only permissions (it may contain
-/// resolved secret values).
+/// resolved secret values). Uses O_EXCL to avoid symlink races.
 fn write_override_file(path: &Path, contents: String) -> Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
+        if path.is_symlink() {
+            return Err(BondarError::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("refusing to overwrite symlink at {}", path.display()),
+            )));
+        }
         let mut f = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
             .open(path)
             .map_err(BondarError::Io)?;
@@ -326,6 +349,12 @@ fn write_override_file(path: &Path, contents: String) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
+        if path.is_symlink() {
+            return Err(BondarError::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("refusing to overwrite symlink at {}", path.display()),
+            )));
+        }
         std::fs::write(path, contents).map_err(BondarError::Io)?;
     }
     Ok(())
@@ -427,9 +456,15 @@ pub fn compose_up(
     }
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-    let status = cmd
-        .status()
-        .map_err(|e| BondarError::Docker(format!("Failed to run docker compose up: {e}")))?;
+    let status = match cmd.status() {
+        Ok(s) => s,
+        Err(e) => {
+            cleanup_override(override_path);
+            return Err(BondarError::Docker(format!(
+                "Failed to run docker compose up: {e}"
+            )));
+        }
+    };
     cleanup_override(override_path);
     if !status.success() {
         return Err(BondarError::Docker("docker compose up failed".to_string()));
@@ -473,9 +508,15 @@ pub fn compose_down(
     cmd.arg(action);
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
-    let status = cmd
-        .status()
-        .map_err(|e| BondarError::Docker(format!("Failed to run docker compose {action}: {e}")))?;
+    let status = match cmd.status() {
+        Ok(s) => s,
+        Err(e) => {
+            cleanup_override(override_path);
+            return Err(BondarError::Docker(format!(
+                "Failed to run docker compose {action}: {e}"
+            )));
+        }
+    };
     cleanup_override(override_path);
     if !status.success() {
         return Err(BondarError::Docker(format!(
@@ -505,9 +546,15 @@ pub fn get_service_container_id(
     cmd.arg("-q");
     cmd.arg(service);
     cmd.current_dir(workspace_folder);
-    let output = cmd
-        .output()
-        .map_err(|e| BondarError::Docker(format!("Failed to run docker compose ps: {e}")))?;
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            cleanup_override(override_path);
+            return Err(BondarError::Docker(format!(
+                "Failed to run docker compose ps: {e}"
+            )));
+        }
+    };
     cleanup_override(override_path);
     if !output.status.success() {
         return Err(BondarError::Docker("docker compose ps failed".to_string()));
@@ -625,9 +672,15 @@ pub fn compose_exec(
     cmd.arg(service);
     cmd.args(command);
     cmd.current_dir(workspace_folder);
-    let status = cmd
-        .status()
-        .map_err(|e| BondarError::Docker(format!("Failed to run docker compose exec: {e}")))?;
+    let status = match cmd.status() {
+        Ok(s) => s,
+        Err(e) => {
+            cleanup_override(override_path);
+            return Err(BondarError::Docker(format!(
+                "Failed to run docker compose exec: {e}"
+            )));
+        }
+    };
     cleanup_override(override_path);
     if !status.success() {
         let code = status.code().unwrap_or(1);

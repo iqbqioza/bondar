@@ -4,9 +4,22 @@
 
 Requirements:
 
-- A Rust toolchain (only for building)
 - The Docker CLI (`docker`) available on `PATH`
 - Docker Desktop (macOS/Windows) or the Docker daemon (Linux)
+
+Install the latest release binary (no sudo required):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/iqbqioza/bondar/main/install.sh | sh
+```
+
+Windows (PowerShell, no admin required):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+Or build from source (requires a Rust toolchain):
 
 ```sh
 cargo build --release

@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2019-09/schema",
 	"description": "Defines a dev container",
 	"allowComments": true,
-	"allowTrailingCommas": false,
+	"allowTrailingCommas": true,
 	"definitions": {
 		"devContainerCommon": {
 			"type": "object",
@@ -11,6 +11,10 @@
 					"type": "string",
 					"format": "uri",
 					"description": "The JSON schema of the `devcontainer.json` file."
+				},
+				"containerName": {
+					"type": "string",
+					"description": "The name of the container (overrides the generated name from 'name' or the workspace folder)."
 				},
 				"name": {
 					"type": "string",
@@ -73,8 +77,7 @@
 								}
 							},
 							"additionalProperties": false
-						},
-						"additionalProperties": false
+						}
 					},
 					"additionalProperties": false
 				},
@@ -492,10 +495,6 @@
 				"customizations": {
 					"type": "object",
 					"description": "Tool-specific configuration. Each tool should use a JSON object subproperty with a unique name to group its customizations."
-				},
-				"additionalProperties": {
-					"type": "object",
-					"additionalProperties": true
 				}
 			}
 		},
@@ -771,9 +770,25 @@
 			]
 		},
 		{
-			"type": "object",
-			"$ref": "#/definitions/devContainerCommon",
-			"additionalProperties": false
+			"allOf": [
+				{
+					"$ref": "#/definitions/devContainerCommon"
+				},
+				{
+					"oneOf": [
+						{
+							"$ref": "#/definitions/dockerfileContainer"
+						},
+						{
+							"$ref": "#/definitions/imageContainer"
+						},
+						{
+							"$ref": "#/definitions/composeContainer"
+						}
+					]
+				}
+			],
+			"unevaluatedProperties": false
 		}
 	],
 	"unevaluatedProperties": false

@@ -22,8 +22,9 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     let container_name = cfg.container_name(&ws);
 
     // Never stop/remove a container that belongs to a different workspace
-    // (same-basename name collision).
-    if shutdown != "none" && docker::container_exists(&container_name)? {
+    // (same-basename name collision). Reuse a single existence check.
+    let exists = docker::container_exists(&container_name)?;
+    if shutdown != "none" && exists {
         docker::ensure_container_matches_workspace(&container_name, &ws)?;
     }
 
@@ -32,7 +33,7 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             println!("shutdownAction is 'none', skipping down (container kept)");
         }
         "stopContainer" => {
-            if !docker::container_exists(&container_name)? {
+            if !exists {
                 println!("Container {container_name} does not exist");
                 return Ok(());
             }
@@ -44,7 +45,7 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             eprintln!(
                 "Warning: shutdownAction 'stopCompose' requires dockerComposeFile; treating as remove"
             );
-            if !docker::container_exists(&container_name)? {
+            if !exists {
                 println!("Container {container_name} does not exist");
                 return Ok(());
             }
@@ -53,7 +54,9 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             println!("Container {container_name} removed");
         }
         _ => {
-            if !docker::container_exists(&container_name)? {
+            // Already validated in config::validate, but handle defensively
+            eprintln!("Warning: unknown shutdownAction '{shutdown}'; treating as remove");
+            if !exists {
                 println!("Container {container_name} does not exist");
                 return Ok(());
             }

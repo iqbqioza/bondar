@@ -7,6 +7,7 @@ Documentation for **bondar**, a standalone devcontainer alternative that does no
 - [User manual](manual.md) - installation, commands, configuration reference, lifecycle, environment variables, features, compose
 - [FAQ](faq.md) - frequently asked questions
 - [Troubleshooting](troubleshooting.md) - common issues and their solutions
+- [Images](images/bondar-small.png) - project logo (CC0, 1254×1254 PNG)
 
 ## Quick reference
 
