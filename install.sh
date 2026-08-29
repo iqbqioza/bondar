@@ -74,8 +74,9 @@ download() { # url output_file
 }
 
 on_path() { # dir
-    # Use fixed-string grep to avoid glob interpretation of special chars in dir
-    printf '%s' ":${PATH}:" | grep -F -q ":$1:"
+    # Use fixed-string grep and handle trailing slashes (PATH may contain /foo vs /foo/)
+    dir=${1%/}
+    printf '%s' ":${PATH}:" | grep -F -q ":$dir:" || printf '%s' ":${PATH}:" | grep -F -q ":$dir/:"
 }
 
 # --- resolve the release tag -------------------------------------------------
@@ -194,14 +195,22 @@ if download "${DOWNLOAD_BASE}/${tag}/SHA256SUMS" "$tmpdir/SHA256SUMS" 2>/dev/nul
     fi
     if [ -z "$sum" ]; then
         echo "warning: no sha256sum/shasum found; skipping checksum verification" >&2
-    elif ! grep -q -- "$sum" "$tmpdir/SHA256SUMS"; then
+    elif ! grep -F -- "$sum" "$tmpdir/SHA256SUMS" | grep -F -q -- "$asset"; then
         echo "error: checksum verification failed for ${asset}" >&2
         exit 1
     else
         echo "Checksum verified."
     fi
 else
-    echo "warning: SHA256SUMS not found for ${tag}; skipping checksum verification" >&2
+    if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+        echo "error: SHA256SUMS not found for ${tag}; cannot verify ${asset} (use BONDAR_INSECURE=1 to skip)" >&2
+        if [ "${BONDAR_INSECURE:-}" != "1" ]; then
+            exit 1
+        fi
+        echo "warning: proceeding without verification due to BONDAR_INSECURE=1" >&2
+    else
+        echo "warning: SHA256SUMS not found for ${tag}; skipping checksum verification" >&2
+    fi
 fi
 
 chmod +x "$tmpdir/bondar"

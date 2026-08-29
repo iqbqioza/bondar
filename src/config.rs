@@ -59,6 +59,9 @@ pub struct DevContainerConfig {
     #[serde(rename = "remoteUser", default)]
     pub remote_user: Option<String>,
 
+    #[serde(rename = "containerName", default)]
+    pub container_name_override: Option<String>,
+
     #[serde(rename = "containerUser", default)]
     pub container_user: Option<String>,
 
@@ -242,6 +245,22 @@ impl DevContainerConfig {
             if !trimmed.chars().any(|c| c.is_ascii_alphanumeric()) {
                 return Err(BondarError::Config(
                     "'name' must contain at least one ASCII alphanumeric character".to_string(),
+                ));
+            }
+        }
+        if let Some(cn) = &self.container_name_override {
+            if cn.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'containerName' must not be empty".to_string(),
+                ));
+            }
+            if !cn
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+                || !cn.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+            {
+                return Err(BondarError::Config(
+                    "'containerName' must match '[a-zA-Z0-9][a-zA-Z0-9_.-]*'".to_string(),
                 ));
             }
         }
@@ -470,6 +489,9 @@ impl DevContainerConfig {
     }
 
     pub fn container_name(&self, workspace_path: &Path) -> String {
+        if let Some(explicit) = &self.container_name_override {
+            return explicit.clone();
+        }
         if let Some(name) = &self.name {
             let sanitized: String = name
                 .chars()

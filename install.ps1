@@ -105,7 +105,10 @@ try {
     }
     catch {
         if ($_.Exception.Message -match '^Checksum') { throw }
-        Write-Host 'Warning: SHA256SUMS not found; skipping checksum verification.' -ForegroundColor Yellow
+        if ($env:BONDAR_INSECURE -ne '1') {
+            throw "SHA256SUMS not found for $tag; cannot verify $Asset (set BONDAR_INSECURE=1 to skip)."
+        }
+        Write-Host 'Warning: SHA256SUMS not found; proceeding without verification due to BONDAR_INSECURE=1.' -ForegroundColor Yellow
     }
 
     Copy-Item -LiteralPath (Join-Path $tmpDir 'bondar.exe') -Destination $Target -Force

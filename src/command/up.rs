@@ -391,6 +391,9 @@ fn run_compose(
         // Force rebuild with no cache for compose
         let mut build_cmd = std::process::Command::new("docker");
         build_cmd.arg("compose");
+        build_cmd
+            .arg("--project-name")
+            .arg(docker::compose_project_name(ws));
         for arg in crate::compose::compose_files_args_for_build(cfg, cfg_path, ws)? {
             build_cmd.arg(arg);
         }
