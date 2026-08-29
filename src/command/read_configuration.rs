@@ -287,6 +287,30 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
     merged.insert("runServices".into(), json!(cfg.run_services));
     merged.insert("shutdownAction".into(), json!(cfg.shutdown_action));
     merged.insert("waitFor".into(), json!(cfg.wait_for));
+    merged.insert("privileged".into(), json!(cfg.privileged));
+    merged.insert("capAdd".into(), json!(cfg.cap_add));
+    merged.insert("securityOpt".into(), json!(cfg.security_opt));
+    merged.insert("init".into(), json!(cfg.init));
+    merged.insert("overrideCommand".into(), json!(cfg.override_command));
+    merged.insert(
+        "updateRemoteUserUID".into(),
+        json!(cfg.update_remote_user_uid),
+    );
+    merged.insert(
+        "otherPortsAttributes".into(),
+        json!(cfg.other_ports_attributes),
+    );
+    merged.insert("portsAttributes".into(), json!(cfg.ports_attributes));
+    merged.insert(
+        "overrideFeatureInstallOrder".into(),
+        json!(cfg.override_feature_install_order),
+    );
+    merged.insert("workspaceMount".into(), json!(cfg.workspace_mount));
+    merged.insert("runArgs".into(), json!(cfg.run_args));
+    merged.insert("appPort".into(), json!(cfg.app_port));
+    merged.insert("customizations".into(), json!(cfg.customizations));
+    merged.insert("hostRequirements".into(), json!(cfg.host_requirements));
+    merged.insert("userEnvProbe".into(), json!(cfg.user_env_probe));
     // containerName only applies to image/Dockerfile configs; compose
     // containers are named by the per-workspace compose project.
     if cfg.docker_compose_file.is_none() {
