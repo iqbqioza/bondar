@@ -316,9 +316,10 @@ fn wait_index(wait: &Option<String>) -> usize {
         "postCreateCommand",
         "postStartCommand",
     ];
-    wait.as_ref()
-        .and_then(|w| ORDER.iter().position(|&x| x == w))
-        .unwrap_or(usize::MAX)
+    match wait {
+        None => 2, // Spec default is "updateContentCommand"
+        Some(w) => ORDER.iter().position(|&x| x == w).unwrap_or(usize::MAX),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -592,7 +593,7 @@ mod tests {
             usize::MAX
         );
         assert_eq!(wait_index(&Some("bogus".to_string())), usize::MAX);
-        assert_eq!(wait_index(&None), usize::MAX);
+        assert_eq!(wait_index(&None), 2);
         assert_eq!(wait_index(&Some(String::new())), usize::MAX);
     }
 }

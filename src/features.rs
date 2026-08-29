@@ -558,20 +558,36 @@ fn install_feature(
         eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
         return Ok(());
     }
-    if !opts.is_object() && !opts.is_null() {
-        eprintln!(
-            "Warning: feature '{id}' options must be an object, got {opts}; ignoring options"
-        );
-    }
+    // String value is shorthand for version: "features": {"id": "18"} -> "id:18"
+    let (effective_id, effective_opts) = if let Some(v) = opts.as_str() {
+        if id.contains(':') {
+            eprintln!(
+                "Warning: feature '{id}' already contains a version, ignoring string option '{v}'"
+            );
+            (id.to_string(), opts)
+        } else {
+            (
+                format!("{id}:{v}"),
+                &serde_json::Value::Null as &serde_json::Value,
+            )
+        }
+    } else {
+        if !opts.is_object() && !opts.is_null() {
+            eprintln!(
+                "Warning: feature '{id}' options must be an object, got {opts}; ignoring options"
+            );
+        }
+        (id.to_string(), opts)
+    };
 
-    println!("Attempting to install feature '{id}' with opts {opts}...");
+    println!("Attempting to install feature '{effective_id}' with opts {effective_opts}...");
 
-    let dest_dir = feature_cache_dir().join(sanitize_id(id));
+    let dest_dir = feature_cache_dir().join(sanitize_id(&effective_id));
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         eprintln!("  Warning: could not create feature directory: {e}");
         return Ok(());
     }
-    if let Err(e) = fetch_feature(id, &dest_dir) {
+    if let Err(e) = fetch_feature(&effective_id, &dest_dir) {
         // Avoid stale metadata from a previous failed/partial fetch
         let _ = std::fs::remove_dir_all(&dest_dir);
         return Err(e);
@@ -606,15 +622,21 @@ fn install_feature(
     }
 
     if let Some(container) = container_name {
-        let container_path = format!("/tmp/bondar_features/{}", sanitize_id(id));
+        let container_path = format!("/tmp/bondar_features/{}", sanitize_id(&effective_id));
         if let Err(e) = copy_feature_into_container(&dest_dir, container, &container_path) {
             eprintln!("  Warning: could not copy feature into container: {e}");
             return Ok(());
         }
-        install_in_container(id, opts, container, &container_path, container_user)?;
+        install_in_container(
+            &effective_id,
+            effective_opts,
+            container,
+            &container_path,
+            container_user,
+        )?;
     } else {
         println!(
-            "  Feature {id} fetched to {}. Execution requires a running container (use 'bondar up' first).",
+            "  Feature {effective_id} fetched to {}. Execution requires a running container (use 'bondar up' first).",
             dest_dir.display()
         );
     }
