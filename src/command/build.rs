@@ -45,7 +45,7 @@ pub fn run(
         return Ok(());
     }
 
-    if cfg.build.is_none() {
+    if !cfg.effective_has_build() {
         println!("No build configured, image: {:?}", cfg.image);
         return Ok(());
     }

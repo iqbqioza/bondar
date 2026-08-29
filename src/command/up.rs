@@ -104,9 +104,9 @@ pub fn run(
 
     let image_name = docker::resolve_image_name(&cfg, &ws)?;
 
-    if cfg.build.is_some() && !no_build {
+    if cfg.effective_has_build() && !no_build {
         docker::build_image(&cfg, &cfg_path, &ws, &image_name, no_cache)?;
-    } else if cfg.build.is_some() {
+    } else if cfg.effective_has_build() {
         println!("Skipping image build (--no-build)");
     }
 
@@ -417,28 +417,30 @@ fn run_compose(
 
     let service = cfg.service.as_deref().unwrap_or("service");
     // When the container name cannot be resolved, docker exec based steps
-    // (UID sync, features) cannot run; skip them instead of executing against
-    // a guessed name.
-    let resolved_container = crate::compose::get_service_container_name(cfg, cfg_path, ws);
-    match &resolved_container {
+    // (UID sync, features, lifecycle) cannot run; skip them instead of
+    // executing against a guessed name (e.g. bare service name).
+    let container_name = match crate::compose::get_service_container_name(cfg, cfg_path, ws) {
         Ok(name) => {
-            host::handle_update_remote_user_uid(cfg, name)?;
+            host::handle_update_remote_user_uid(cfg, &name)?;
             if newly_created {
                 crate::features::handle_features_with_container(
                     &cfg.features,
                     &cfg.override_feature_install_order,
-                    Some(name),
+                    Some(&name),
                     cfg.remote_user.as_deref(),
                 )?;
             }
+            name
         }
         Err(e) => {
             eprintln!(
-                "Warning: could not resolve service container name ({e}); skipping UID sync and feature installation"
+                "Warning: could not resolve service container name ({e}); skipping UID sync, feature installation and lifecycle hooks"
             );
+            println!("Compose service {service} is up (container name could not be resolved)");
+            println!("  Workspace: {}", ws.display());
+            return Ok(());
         }
-    }
-    let container_name = resolved_container.unwrap_or_else(|_| service.to_string());
+    };
 
     let workspace_target = cfg
         .workspace_folder
