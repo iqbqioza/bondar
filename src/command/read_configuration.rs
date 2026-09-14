@@ -220,11 +220,12 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         env.insert((*k).clone(), Value::String(value));
     }
     // Secret values are never printed; only their key names are listed.
-    let secret_names: Vec<String> = cfg
+    let mut secret_names: Vec<String> = cfg
         .secrets
         .as_ref()
         .map(|s| s.keys().cloned().collect())
         .unwrap_or_default();
+    secret_names.sort();
 
     let default_name = ws
         .file_name()
