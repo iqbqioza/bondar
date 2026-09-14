@@ -170,6 +170,8 @@ Constraints enforced by validation:
 - Object-form `mounts` entries must specify `type` and `target`.
 - `forwardPorts`/`appPort` string forms are validated (port numbers, ranges, `host:container`, IPv6 brackets, `/udp`/`/tcp`).
 
+When `workspaceFolder` is omitted, the workspace is mounted at `/workspaces/<workspace directory name>` (the spec default) for `image`/`build` configurations; compose configurations default to `/`.
+
 ### Environment variables
 
 ```json

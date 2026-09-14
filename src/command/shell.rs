@@ -25,7 +25,7 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
                 .clone()
                 .unwrap_or_else(|| "/".to_string())
         } else {
-            cfg.workspace_folder_or_default()
+            cfg.workspace_folder_or_default(&ws)
         });
         let env = crate::command::exec::compose_exec_env(&cfg, &cfg_path, &ws, user.as_deref());
         return crate::compose::compose_exec(
@@ -56,7 +56,7 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     ];
 
     let env = crate::command::exec::merged_exec_env(&cfg, &container_name, user.as_deref());
-    let container_workspace = cfg.workspace_folder_or_default();
+    let container_workspace = cfg.workspace_folder_or_default(&ws);
     let container_env_map: std::collections::HashMap<String, String> = cfg
         .container_env
         .iter()

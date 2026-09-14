@@ -186,7 +186,7 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
             .clone()
             .unwrap_or_else(|| "/".to_string())
     } else {
-        cfg.workspace_folder_or_default()
+        cfg.workspace_folder_or_default(ws)
     };
     // Container env and remote env (null remoteEnv entries are skipped).
     // ${containerEnv:KEY} references resolve against the raw containerEnv
@@ -326,7 +326,7 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
             .clone()
             .unwrap_or_else(|| "/".to_string())
     } else {
-        cfg.workspace_folder_or_default()
+        cfg.workspace_folder_or_default(ws)
     };
     merged.insert("defaultWorkspaceFolder".into(), json!(default_ws));
 

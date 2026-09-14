@@ -481,12 +481,13 @@ impl DevContainerConfig {
         Ok(())
     }
 
-    /// Default container workspace folder for image/Dockerfile configurations.
-    /// Compose configurations use "/" as their default (handled by callers).
-    pub fn workspace_folder_or_default(&self) -> String {
+    /// Default container workspace folder for image/Dockerfile configurations:
+    /// `/workspaces/<workspace directory name>` per the spec. Compose
+    /// configurations use "/" as their default (handled by callers).
+    pub fn workspace_folder_or_default(&self, workspace_folder: &Path) -> String {
         self.workspace_folder
             .clone()
-            .unwrap_or_else(|| "/workspace".to_string())
+            .unwrap_or_else(|| default_workspace_folder(workspace_folder))
     }
 
     /// `remoteEnv` entries with a `null` value are treated as unset (the
@@ -537,6 +538,16 @@ impl DevContainerConfig {
             format!("bondar-{suffix}")
         }
     }
+}
+
+/// Spec default for `workspaceFolder` when it is not configured.
+pub fn default_workspace_folder(workspace_folder: &Path) -> String {
+    let basename = workspace_folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("workspace");
+    format!("/workspaces/{basename}")
 }
 
 pub fn find_config_path(workspace_folder: &Path) -> Option<PathBuf> {
@@ -1006,13 +1017,19 @@ mod tests {
     #[test]
     fn test_workspace_folder_or_default() {
         let cfg = DevContainerConfig::default();
-        assert_eq!(cfg.workspace_folder_or_default(), "/workspace");
+        assert_eq!(
+            cfg.workspace_folder_or_default(Path::new("/tmp/my-workspace")),
+            "/workspaces/my-workspace"
+        );
 
         let cfg2 = DevContainerConfig {
             workspace_folder: Some("/myws".to_string()),
             ..Default::default()
         };
-        assert_eq!(cfg2.workspace_folder_or_default(), "/myws");
+        assert_eq!(
+            cfg2.workspace_folder_or_default(Path::new("/tmp/my-workspace")),
+            "/myws"
+        );
     }
 
     #[test]

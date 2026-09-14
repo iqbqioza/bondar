@@ -220,6 +220,7 @@ fn format_bytes(bytes: u64) -> String {
 pub fn handle_update_remote_user_uid(
     config: &crate::config::DevContainerConfig,
     container_name: &str,
+    workspace_folder: &Path,
 ) -> Result<()> {
     let should_update = config.update_remote_user_uid.unwrap_or(true);
     if !should_update {
@@ -352,7 +353,7 @@ pub fn handle_update_remote_user_uid(
         }
 
         // Chown workspace if it exists inside container
-        chown_workspace(config, container_name, user);
+        chown_workspace(config, container_name, user, workspace_folder);
     }
 
     // Fallback: create the user (and its group) when it does not exist in the container
@@ -390,7 +391,7 @@ pub fn handle_update_remote_user_uid(
             if ua.status.success() {
                 println!("Created user {user}");
                 // After creating the user, take ownership of the workspace
-                chown_workspace(config, container_name, user);
+                chown_workspace(config, container_name, user, workspace_folder);
             } else {
                 eprintln!(
                     "Warning: useradd failed: {}",
@@ -471,7 +472,12 @@ fn get_host_uid() -> u32 {
 }
 
 /// Chown the workspace directory to the given user, guarding against "/".
-fn chown_workspace(config: &crate::config::DevContainerConfig, container_name: &str, user: &str) {
+fn chown_workspace(
+    config: &crate::config::DevContainerConfig,
+    container_name: &str,
+    user: &str,
+    workspace_folder: &Path,
+) {
     // For compose, the default workspace folder is "/" (spec); chown of "/"
     // is skipped below, so only chown when workspaceFolder is set explicitly.
     let chown_target = if config.docker_compose_file.is_some() {
@@ -480,7 +486,7 @@ fn chown_workspace(config: &crate::config::DevContainerConfig, container_name: &
             .clone()
             .unwrap_or_else(|| "/".to_string())
     } else {
-        config.workspace_folder_or_default()
+        config.workspace_folder_or_default(workspace_folder)
     };
     if chown_target == "/" {
         eprintln!(
