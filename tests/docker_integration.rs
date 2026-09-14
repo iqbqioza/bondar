@@ -1087,7 +1087,7 @@ fn test_image_metadata_remote_user() {
     );
     std::fs::write(
         ws.join("Dockerfile"),
-        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"remoteUser\":\"vscode\",\"containerEnv\":{\"META_ENV\":\"1\"},\"privileged\":true}]'\n",
+        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"remoteUser\":\"vscode\",\"containerEnv\":{\"META_ENV\":\"1\"},\"privileged\":true,\"postCreateCommand\":\"echo meta-hook > /tmp/meta-hook.txt\"}]'\n",
     )
     .unwrap();
     let build = Command::new("docker")
@@ -1137,6 +1137,21 @@ fn test_image_metadata_remote_user() {
         "containerEnv from image metadata not applied: {}",
         String::from_utf8_lossy(&env.stdout)
     );
+    // Lifecycle hooks from the metadata label run on creation
+    let hook = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--",
+        "cat",
+        "/tmp/meta-hook.txt",
+    ]);
+    assert!(
+        hook.status.success() && String::from_utf8_lossy(&hook.stdout).contains("meta-hook"),
+        "postCreateCommand from image metadata not executed: {}",
+        String::from_utf8_lossy(&hook.stderr)
+    );
+
     let privileged = Command::new("docker")
         .args([
             "inspect",
