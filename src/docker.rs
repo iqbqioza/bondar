@@ -756,8 +756,14 @@ pub fn validate_port_spec(s: &str) -> std::result::Result<(), String> {
         if parts.is_empty() || parts.len() > 2 || parts.iter().any(|p| p.is_empty()) {
             return Err("invalid IPv6 port form".to_string());
         }
-        for p in parts {
-            validate_container_port(p)?;
+        match parts.len() {
+            1 => validate_container_port(parts[0])?,
+            // "host:container": a host port of 0 selects a random host port
+            2 => {
+                validate_host_port(parts[0])?;
+                validate_container_port(parts[1])?;
+            }
+            _ => return Err("invalid IPv6 port form".to_string()),
         }
         return Ok(());
     }
@@ -942,14 +948,14 @@ fn publish_ipv6_arg(spec: &str) -> Option<String> {
     }
     match ports.len() {
         1 => {
-            if is_port_or_range(ports[0]) {
+            if is_port_or_range(ports[0]) && ports[0] != "0" {
                 Some(format!("[{addr}]:{}:{}", ports[0], ports[0]))
             } else {
                 None
             }
         }
         2 => {
-            if is_port_or_range(ports[0]) && is_port_or_range(ports[1]) {
+            if is_port_or_range(ports[0]) && is_port_or_range(ports[1]) && ports[1] != "0" {
                 Some(format!("[{addr}]:{}:{}", ports[0], ports[1]))
             } else {
                 None
@@ -1523,6 +1529,9 @@ mod tests {
         assert!(validate_port_spec("8080-8085-8090").is_err());
         assert!(validate_port_spec("[::1]").is_err());
         assert!(validate_port_spec("[::1]:0").is_err());
+        // IPv6 host-side port 0 selects a random host port
+        assert!(validate_port_spec("[::1]:0:8080").is_ok());
+        assert!(validate_port_spec("[::1]:8080:0").is_err());
     }
 
     #[test]
@@ -1650,6 +1659,13 @@ mod tests {
         assert_eq!(publish_port_arg("[]:8080"), None);
         assert_eq!(publish_port_arg("[::1]:abc"), None);
         assert_eq!(publish_port_arg("[::1]:8080:abc"), None);
+        // Host-side 0 is allowed (random port); container-side 0 is not
+        assert_eq!(
+            publish_port_arg("[::1]:0:8080"),
+            Some("[::1]:0:8080".to_string())
+        );
+        assert_eq!(publish_port_arg("[::1]:0"), None);
+        assert_eq!(publish_port_arg("[::1]:8080:0"), None);
     }
 
     #[test]
