@@ -153,12 +153,12 @@ fn merge_feature_container_properties(
 /// can be created with them.
 pub fn prefetch_feature_container_properties(
     features: &Option<HashMap<String, serde_json::Value>>,
-) -> Result<FeatureContainerProperties> {
+) -> Result<(FeatureContainerProperties, Vec<String>)> {
     let Some(feat_map) = features else {
-        return Ok(FeatureContainerProperties::default());
+        return Ok((FeatureContainerProperties::default(), Vec::new()));
     };
     if feat_map.is_empty() {
-        return Ok(FeatureContainerProperties::default());
+        return Ok((FeatureContainerProperties::default(), Vec::new()));
     }
     let has_docker = std::process::Command::new("docker")
         .arg("version")
@@ -167,22 +167,24 @@ pub fn prefetch_feature_container_properties(
         .unwrap_or(false);
     if !has_docker {
         eprintln!("Warning: docker not available, cannot read feature metadata");
-        return Ok(FeatureContainerProperties::default());
+        return Ok((FeatureContainerProperties::default(), Vec::new()));
     }
     let mut props = FeatureContainerProperties::default();
+    let mut prefetched = Vec::new();
     let mut visited = std::collections::HashSet::new();
     let mut visiting = std::collections::HashSet::new();
     let mut ids: Vec<&String> = feat_map.keys().collect();
     ids.sort();
     for id in ids {
-        prefetch_one_feature(id, &mut props, &mut visited, &mut visiting)?;
+        prefetch_one_feature(id, &mut props, &mut prefetched, &mut visited, &mut visiting)?;
     }
-    Ok(props)
+    Ok((props, prefetched))
 }
 
 fn prefetch_one_feature(
     id: &str,
     props: &mut FeatureContainerProperties,
+    prefetched: &mut Vec<String>,
     visited: &mut std::collections::HashSet<String>,
     visiting: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -193,7 +195,7 @@ fn prefetch_one_feature(
         eprintln!("Warning: circular dependsOn detected for feature '{id}'; skipping dependency");
         return Ok(());
     }
-    let result = prefetch_one_feature_inner(id, props, visited, visiting);
+    let result = prefetch_one_feature_inner(id, props, prefetched, visited, visiting);
     visiting.remove(id);
     result
 }
@@ -201,6 +203,7 @@ fn prefetch_one_feature(
 fn prefetch_one_feature_inner(
     id: &str,
     props: &mut FeatureContainerProperties,
+    prefetched: &mut Vec<String>,
     visited: &mut std::collections::HashSet<String>,
     visiting: &mut std::collections::HashSet<String>,
 ) -> Result<()> {
@@ -211,6 +214,7 @@ fn prefetch_one_feature_inner(
     let Some(dest_dir) = fetch_feature_to_cache(id)? else {
         return Ok(());
     };
+    prefetched.push(id.to_string());
     if let Some(meta) = read_feature_metadata(&dest_dir) {
         if meta
             .get("deprecated")
@@ -227,7 +231,7 @@ fn prefetch_one_feature_inner(
                     eprintln!("Warning: feature '{id}' dependsOn itself; skipping");
                     continue;
                 }
-                prefetch_one_feature(dep_id, props, visited, visiting)?;
+                prefetch_one_feature(dep_id, props, prefetched, visited, visiting)?;
             }
         }
     }
@@ -368,6 +372,7 @@ pub fn collect_feature_lifecycle_hooks(
 pub fn handle_features_with_container(
     features: &Option<HashMap<String, serde_json::Value>>,
     override_order: &Option<Vec<String>>,
+    prefetched: &[String],
     container_name: Option<&str>,
     remote_user: Option<&str>,
     container_user: Option<&str>,
@@ -394,7 +399,8 @@ pub fn handle_features_with_container(
         println!("  - {id}: {opts}");
     }
 
-    let mut installer = FeatureInstaller::new(container_name, remote_user, container_user);
+    let mut installer =
+        FeatureInstaller::new(container_name, remote_user, container_user, prefetched);
 
     if let Some(order) = override_order {
         println!("Override feature install order: {order:?}");
@@ -1158,6 +1164,7 @@ struct FeatureInstaller<'a> {
     container_name: Option<&'a str>,
     remote_user: Option<&'a str>,
     container_user: Option<&'a str>,
+    prefetched: &'a [String],
     installed: HashMap<String, serde_json::Value>,
     order: Vec<String>,
     visiting: std::collections::HashSet<String>,
@@ -1168,11 +1175,13 @@ impl<'a> FeatureInstaller<'a> {
         container_name: Option<&'a str>,
         remote_user: Option<&'a str>,
         container_user: Option<&'a str>,
+        prefetched: &'a [String],
     ) -> Self {
         Self {
             container_name,
             remote_user,
             container_user,
+            prefetched,
             installed: HashMap::new(),
             order: Vec::new(),
             visiting: std::collections::HashSet::new(),
@@ -1202,7 +1211,19 @@ impl<'a> FeatureInstaller<'a> {
         let effective_opts = effective_feature_opts(id, opts);
         println!("Attempting to install feature '{id}' with opts {effective_opts}...");
 
-        let Some(dest_dir) = fetch_feature_to_cache(id)? else {
+        // Reuse an artifact fetched by the pre-fetch pass (same run) instead
+        // of downloading the feature a second time.
+        let dest_dir = if self.prefetched.iter().any(|p| p.as_str() == id) {
+            let dir = feature_cache_dir().join(sanitize_id(id));
+            if dir.is_dir() {
+                Some(dir)
+            } else {
+                fetch_feature_to_cache(id)?
+            }
+        } else {
+            fetch_feature_to_cache(id)?
+        };
+        let Some(dest_dir) = dest_dir else {
             return Ok(());
         };
 
@@ -1240,9 +1261,9 @@ mod tests {
 
     #[test]
     fn test_handle_empty() {
-        assert!(handle_features_with_container(&None, &None, None, None, None).is_ok());
+        assert!(handle_features_with_container(&None, &None, &[], None, None, None).is_ok());
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
-        assert!(handle_features_with_container(&Some(empty), &None, None, None, None).is_ok());
+        assert!(handle_features_with_container(&Some(empty), &None, &[], None, None, None).is_ok());
     }
 
     #[test]
