@@ -12,7 +12,10 @@ pub fn collect_feature_customizations(
         return serde_json::Value::Object(Default::default());
     };
     let mut merged = serde_json::Map::new();
-    for id in feat_map.keys() {
+    // Sorted ids keep the merge deterministic (HashMap iteration is not)
+    let mut ids: Vec<&String> = feat_map.keys().collect();
+    ids.sort();
+    for id in ids {
         let dir = feature_cache_dir().join(sanitize_id(id));
         let Some(meta) = read_feature_metadata(&dir) else {
             continue;
@@ -30,13 +33,74 @@ pub fn collect_feature_customizations(
             if let Some(existing) = entry.as_object_mut()
                 && let Some(incoming) = value.as_object()
             {
-                for (k, v) in incoming {
-                    existing.insert(k.clone(), v.clone());
-                }
+                merge_customization_values(existing, incoming);
             }
         }
     }
     serde_json::Value::Object(merged)
+}
+
+/// Merge one feature's customization namespace into the accumulated one:
+/// objects are merged recursively, arrays are set as a union and other values
+/// are replaced (per spec).
+fn merge_customization_values(
+    existing: &mut serde_json::Map<String, serde_json::Value>,
+    incoming: &serde_json::Map<String, serde_json::Value>,
+) {
+    for (k, v) in incoming {
+        match (existing.get_mut(k), v) {
+            (Some(serde_json::Value::Object(dest)), serde_json::Value::Object(src)) => {
+                merge_customization_values(dest, src);
+            }
+            (Some(serde_json::Value::Array(dest)), serde_json::Value::Array(src)) => {
+                for item in src {
+                    if !dest.contains(item) {
+                        dest.push(item.clone());
+                    }
+                }
+            }
+            _ => {
+                existing.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+
+/// Lifecycle hooks that features may declare in their metadata, in spec order.
+pub const FEATURE_LIFECYCLE_HOOKS: [&str; 5] = [
+    "onCreateCommand",
+    "updateContentCommand",
+    "postCreateCommand",
+    "postStartCommand",
+    "postAttachCommand",
+];
+
+/// Collect lifecycle commands declared by features (from cached metadata), in
+/// deterministic feature order, so they can run before the user's lifecycle
+/// commands.
+pub fn collect_feature_lifecycle_hooks(
+    features: &Option<HashMap<String, serde_json::Value>>,
+) -> Vec<(&'static str, serde_json::Value)> {
+    let Some(feat_map) = features else {
+        return Vec::new();
+    };
+    let mut ids: Vec<&String> = feat_map.keys().collect();
+    ids.sort();
+    let mut hooks = Vec::new();
+    for id in ids {
+        let dir = feature_cache_dir().join(sanitize_id(id));
+        let Some(meta) = read_feature_metadata(&dir) else {
+            continue;
+        };
+        for hook in FEATURE_LIFECYCLE_HOOKS {
+            if let Some(value) = meta.get(hook)
+                && !value.is_null()
+            {
+                hooks.push((hook, value.clone()));
+            }
+        }
+    }
+    hooks
 }
 
 pub fn handle_features_with_container(
@@ -730,7 +794,9 @@ fn install_feature(
                 println!("  Feature declares installsAfter: {deps:?}");
             }
         }
-        // Report feature-declared requirements that need a container rebuild
+        // Report feature-declared container properties that bondar does not
+        // apply automatically (they would require recreating the container
+        // with merged configuration)
         for key in [
             "containerEnv",
             "mounts",
@@ -741,7 +807,7 @@ fn install_feature(
         ] {
             if let Some(val) = meta.get(key) {
                 println!(
-                    "  Note: feature declares {key} = {val}; a container rebuild ('bondar up --remove-existing-container') is required to apply it"
+                    "  Note: feature declares {key} = {val}; set {key} in devcontainer.json to apply it (bondar does not merge feature-level {key})"
                 );
             }
         }
@@ -908,6 +974,59 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn test_collect_feature_customizations_unions_arrays() {
+        let id_a = "ghcr.io/test/feature-union-a";
+        let id_b = "ghcr.io/test/feature-union-b";
+        for (id, key) in [(id_a, "a"), (id_b, "b")] {
+            let dir = feature_cache_dir().join(sanitize_id(id));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("devcontainer-feature.json"),
+                format!(
+                    r#"{{"customizations":{{"vscode":{{"extensions":["{key}"],"settings":{{"{key}":1}}}}}}}}"#
+                ),
+            )
+            .unwrap();
+        }
+        let features = Some(HashMap::from([
+            (id_a.to_string(), serde_json::json!({})),
+            (id_b.to_string(), serde_json::json!({})),
+        ]));
+        let merged = collect_feature_customizations(&features);
+        let extensions = merged["vscode"]["extensions"].as_array().unwrap();
+        assert_eq!(extensions.len(), 2);
+        assert!(extensions.contains(&serde_json::json!("a")));
+        assert!(extensions.contains(&serde_json::json!("b")));
+        assert_eq!(merged["vscode"]["settings"]["a"], 1);
+        assert_eq!(merged["vscode"]["settings"]["b"], 1);
+        for id in [id_a, id_b] {
+            let _ = std::fs::remove_dir_all(feature_cache_dir().join(sanitize_id(id)));
+        }
+    }
+
+    #[test]
+    fn test_collect_feature_lifecycle_hooks() {
+        let id = "ghcr.io/test/feature-hooks";
+        let dir = feature_cache_dir().join(sanitize_id(id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("devcontainer-feature.json"),
+            r#"{"postCreateCommand": "echo feature", "postStartCommand": ["echo", "start"]}"#,
+        )
+        .unwrap();
+        let features = Some(HashMap::from([(id.to_string(), serde_json::json!({}))]));
+        let hooks = collect_feature_lifecycle_hooks(&features);
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].0, "postCreateCommand");
+        assert_eq!(hooks[0].1, serde_json::json!("echo feature"));
+        assert_eq!(hooks[1].0, "postStartCommand");
+        assert_eq!(collect_feature_lifecycle_hooks(&None).len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

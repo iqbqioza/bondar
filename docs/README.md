@@ -30,7 +30,7 @@ Global flags: `--workspace-folder <DIR>` (defaults to the current directory), `-
 | `image` / `build` / `dockerComposeFile` | Supported |
 | Lifecycle scripts (6 types) | Supported (String/Array/Object, background via `waitFor`) |
 | `containerEnv` / `remoteEnv` / `secrets` | Supported |
-| `features` / `overrideFeatureInstallOrder` | Supported (OCI fetch + `install.sh`) |
+| `features` / `overrideFeatureInstallOrder` | Supported (OCI fetch + `install.sh`, option defaults + feature lifecycle hooks) |
 | `mounts` / `workspaceMount` / `forwardPorts` / `appPort` | Supported (incl. ranges, IPv6, UDP) |
 | `hostRequirements` / `updateRemoteUserUID` | Supported |
 | `userEnvProbe` | Supported |

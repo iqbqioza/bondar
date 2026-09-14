@@ -206,9 +206,21 @@ pub fn run(
         }
     };
 
+    let feature_hooks = crate::features::collect_feature_lifecycle_hooks(&cfg.features);
+
     let wait_idx = wait_index(&cfg.wait_for);
 
     if newly_created {
+        run_feature_hooks(
+            "onCreateCommand",
+            &feature_hooks,
+            &container_name,
+            exec_user,
+            &workspace_target,
+            &ws,
+            lifecycle_env.as_ref(),
+            &container_env_map,
+        )?;
         if let Some(cmd) = &cfg.on_create_command {
             run_lifecycle_step(
                 "onCreateCommand",
@@ -223,6 +235,16 @@ pub fn run(
                 &container_env_map,
             )?;
         }
+        run_feature_hooks(
+            "updateContentCommand",
+            &feature_hooks,
+            &container_name,
+            exec_user,
+            &workspace_target,
+            &ws,
+            lifecycle_env.as_ref(),
+            &container_env_map,
+        )?;
         if let Some(cmd) = &cfg.update_content_command {
             run_lifecycle_step(
                 "updateContentCommand",
@@ -237,6 +259,16 @@ pub fn run(
                 &container_env_map,
             )?;
         }
+        run_feature_hooks(
+            "postCreateCommand",
+            &feature_hooks,
+            &container_name,
+            exec_user,
+            &workspace_target,
+            &ws,
+            lifecycle_env.as_ref(),
+            &container_env_map,
+        )?;
         if let Some(cmd) = &cfg.post_create_command {
             run_lifecycle_step(
                 "postCreateCommand",
@@ -254,12 +286,10 @@ pub fn run(
     }
 
     let should_run_post_start = newly_created || !was_running;
-    if should_run_post_start && let Some(cmd) = &cfg.post_start_command {
-        run_lifecycle_step(
+    if should_run_post_start {
+        run_feature_hooks(
             "postStartCommand",
-            4,
-            wait_idx,
-            cmd,
+            &feature_hooks,
             &container_name,
             exec_user,
             &workspace_target,
@@ -267,8 +297,32 @@ pub fn run(
             lifecycle_env.as_ref(),
             &container_env_map,
         )?;
+        if let Some(cmd) = &cfg.post_start_command {
+            run_lifecycle_step(
+                "postStartCommand",
+                4,
+                wait_idx,
+                cmd,
+                &container_name,
+                exec_user,
+                &workspace_target,
+                &ws,
+                lifecycle_env.as_ref(),
+                &container_env_map,
+            )?;
+        }
     }
 
+    run_feature_hooks(
+        "postAttachCommand",
+        &feature_hooks,
+        &container_name,
+        exec_user,
+        &workspace_target,
+        &ws,
+        lifecycle_env.as_ref(),
+        &container_env_map,
+    )?;
     if let Some(cmd) = &cfg.post_attach_command {
         run_lifecycle_step(
             "postAttachCommand",
@@ -359,6 +413,34 @@ fn run_lifecycle_step(
             Some(container_env_map),
         )
     }
+}
+
+/// Run lifecycle commands declared by features (they always execute before the
+/// user's own lifecycle commands, per spec).
+#[allow(clippy::too_many_arguments)]
+fn run_feature_hooks(
+    name: &str,
+    hooks: &[(&'static str, serde_json::Value)],
+    container_name: &str,
+    exec_user: Option<&str>,
+    workspace_target: &str,
+    ws: &std::path::Path,
+    lifecycle_env: Option<&std::collections::HashMap<String, String>>,
+    container_env_map: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    for (_, cmd) in hooks.iter().filter(|(hook, _)| *hook == name) {
+        println!("Running feature {name}...");
+        lifecycle::execute_container_lifecycle_with_env(
+            cmd,
+            container_name,
+            exec_user,
+            workspace_target,
+            ws,
+            lifecycle_env,
+            Some(container_env_map),
+        )?;
+    }
+    Ok(())
 }
 
 fn run_compose(
@@ -483,9 +565,21 @@ fn run_compose(
         }
     };
 
+    let feature_hooks = crate::features::collect_feature_lifecycle_hooks(&cfg.features);
+
     let wait_idx = wait_index(&cfg.wait_for);
 
     if newly_created {
+        run_feature_hooks(
+            "onCreateCommand",
+            &feature_hooks,
+            &container_name,
+            exec_user,
+            &workspace_target,
+            ws,
+            lifecycle_env.as_ref(),
+            &container_env_map,
+        )?;
         if let Some(cmd) = &cfg.on_create_command {
             run_lifecycle_step(
                 "onCreateCommand",
@@ -500,6 +594,16 @@ fn run_compose(
                 &container_env_map,
             )?;
         }
+        run_feature_hooks(
+            "updateContentCommand",
+            &feature_hooks,
+            &container_name,
+            exec_user,
+            &workspace_target,
+            ws,
+            lifecycle_env.as_ref(),
+            &container_env_map,
+        )?;
         if let Some(cmd) = &cfg.update_content_command {
             run_lifecycle_step(
                 "updateContentCommand",
@@ -514,6 +618,16 @@ fn run_compose(
                 &container_env_map,
             )?;
         }
+        run_feature_hooks(
+            "postCreateCommand",
+            &feature_hooks,
+            &container_name,
+            exec_user,
+            &workspace_target,
+            ws,
+            lifecycle_env.as_ref(),
+            &container_env_map,
+        )?;
         if let Some(cmd) = &cfg.post_create_command {
             run_lifecycle_step(
                 "postCreateCommand",
@@ -530,14 +644,10 @@ fn run_compose(
         }
     }
 
-    if (newly_created || !was_running)
-        && let Some(cmd) = &cfg.post_start_command
-    {
-        run_lifecycle_step(
+    if newly_created || !was_running {
+        run_feature_hooks(
             "postStartCommand",
-            4,
-            wait_idx,
-            cmd,
+            &feature_hooks,
             &container_name,
             exec_user,
             &workspace_target,
@@ -545,8 +655,32 @@ fn run_compose(
             lifecycle_env.as_ref(),
             &container_env_map,
         )?;
+        if let Some(cmd) = &cfg.post_start_command {
+            run_lifecycle_step(
+                "postStartCommand",
+                4,
+                wait_idx,
+                cmd,
+                &container_name,
+                exec_user,
+                &workspace_target,
+                ws,
+                lifecycle_env.as_ref(),
+                &container_env_map,
+            )?;
+        }
     }
 
+    run_feature_hooks(
+        "postAttachCommand",
+        &feature_hooks,
+        &container_name,
+        exec_user,
+        &workspace_target,
+        ws,
+        lifecycle_env.as_ref(),
+        &container_env_map,
+    )?;
     if let Some(cmd) = &cfg.post_attach_command {
         run_lifecycle_step(
             "postAttachCommand",
