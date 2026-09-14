@@ -554,17 +554,18 @@ pub fn compose_down(
         return Ok(());
     }
 
-    let action = if shutdown == "stopCompose" || shutdown == "stopContainer" {
-        "stop"
-    } else {
-        "down"
+    // stopCompose stops all services; stopContainer stops only the primary one
+    let (action, target_service) = match shutdown {
+        "stopCompose" => ("stop", None),
+        "stopContainer" => ("stop", config.service.as_deref()),
+        _ => ("down", None),
     };
 
     // "stop" fails when no container exists; skip it instead
     if action == "stop" {
         let (exists, _) = service_container_state(config, config_path, workspace_folder)?;
         if !exists {
-            println!("Service container does not exist, skipping 'docker compose stop'");
+            println!("Service container does not exist, skipping 'docker compose {action}'");
             return Ok(());
         }
     }
@@ -572,6 +573,9 @@ pub fn compose_down(
     println!("Running 'docker compose {action}'...");
     let (mut cmd, override_path) = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg(action);
+    if let Some(service) = target_service {
+        cmd.arg(service);
+    }
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     let status = match cmd.status() {

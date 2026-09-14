@@ -1174,3 +1174,72 @@ fn test_image_metadata_remote_user() {
         .output();
     cleanup(&ws);
 }
+
+#[test]
+fn test_compose_stop_container_only_primary() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-compose-stop-primary");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n  db:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-compose-stop-primary", "dockerComposeFile": "../docker-compose.yml", "service": "app", "runServices": ["db"], "workspaceFolder": "/workspace", "shutdownAction": "stopContainer", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "compose up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(
+        down.status.success(),
+        "compose down failed: {}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+
+    // The primary service is stopped; the other service keeps running
+    let project = project_name_for(&ws);
+    let running = |service: &str| {
+        let output = Command::new("docker")
+            .args([
+                "ps",
+                "-q",
+                "--filter",
+                &format!("label=com.docker.compose.project={project}"),
+                "--filter",
+                &format!("label=com.docker.compose.service={service}"),
+            ])
+            .output()
+            .unwrap();
+        !output.stdout.is_empty()
+    };
+    assert!(!running("app"), "primary service should be stopped");
+    assert!(running("db"), "other service should keep running");
+
+    // Cleanup the whole project
+    let compose_file = ws.join("docker-compose.yml");
+    let _ = Command::new("docker")
+        .args([
+            "compose",
+            "--project-name",
+            &project,
+            "-f",
+            compose_file.to_str().unwrap(),
+            "down",
+        ])
+        .output();
+    cleanup(&ws);
+}
