@@ -717,7 +717,9 @@
 					"type": "string",
 					"enum": [
 						"bind",
-						"volume"
+						"volume",
+						"tmpfs",
+						"npipe"
 					],
 					"description": "Mount type."
 				},
