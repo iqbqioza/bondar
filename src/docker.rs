@@ -766,7 +766,7 @@ fn attributes_entry<'a>(
 /// The container-side port portion of a port spec (last `:` segment with an
 /// optional `/udp` or `/tcp` suffix stripped).
 fn container_port_of(port_spec: &str) -> &str {
-    let port = port_spec.rsplit(':').next().unwrap_or(port_spec);
+    let port = port_spec.trim().rsplit(':').next().unwrap_or("");
     port.strip_suffix("/udp")
         .or_else(|| port.strip_suffix("/tcp"))
         .unwrap_or(port)
@@ -812,6 +812,9 @@ pub fn is_port_ignored(config: &DevContainerConfig, port_spec: &str) -> bool {
 }
 
 pub fn publish_port_arg(spec: &str) -> Option<String> {
+    // Surrounding whitespace is tolerated by config validation, so trim it
+    // here as well instead of silently dropping the port.
+    let spec = spec.trim();
     // Preserve an explicit /udp or /tcp protocol suffix if present
     let (base, protocol) = if let Some(b) = spec.strip_suffix("/udp") {
         (b, "/udp")
@@ -1910,6 +1913,26 @@ mod tests {
             publish_port_arg("127.0.0.1:9090/tcp"),
             Some("127.0.0.1:9090:9090/tcp".to_string())
         );
+    }
+
+    #[test]
+    fn test_port_specs_with_surrounding_whitespace() {
+        assert_eq!(
+            publish_port_arg(" 8080 "),
+            Some("0.0.0.0:8080:8080".to_string())
+        );
+        assert_eq!(
+            publish_port_arg(" 8080:80 "),
+            Some("0.0.0.0:8080:80".to_string())
+        );
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(serde_json::json!({
+                "3000": {"onAutoForward": "ignore"}
+            })),
+            ..Default::default()
+        };
+        assert!(is_port_ignored(&cfg, " 3000 "));
+        assert!(is_port_ignored(&cfg, " 127.0.0.1:3000 "));
     }
 
     #[test]
