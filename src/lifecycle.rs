@@ -459,14 +459,29 @@ mod tests {
     #[allow(clippy::zombie_processes)]
     fn test_reap_children() {
         // Spawn a short-lived child and verify it is reaped
-        let child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg("exit 0");
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg("exit 0");
+            c
+        };
+        let child = cmd.spawn().unwrap();
         if let Ok(mut guard) = children().lock() {
             guard.push(child);
         }
-        // Give the child a moment to exit
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        reap_children();
-        let remaining = children().lock().unwrap().len();
+        // Poll instead of a fixed sleep so slow runners do not flake
+        let mut remaining = usize::MAX;
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            reap_children();
+            remaining = children().lock().unwrap().len();
+            if remaining == 0 {
+                break;
+            }
+        }
         assert_eq!(remaining, 0);
     }
 
