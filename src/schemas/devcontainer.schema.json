@@ -706,8 +706,7 @@
 			},
 			"required": [
 				"dockerComposeFile",
-				"service",
-				"workspaceFolder"
+				"service"
 			]
 		},
 		"Mount": {
