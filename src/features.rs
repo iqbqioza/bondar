@@ -470,9 +470,11 @@ fn feature_cache_dir() -> std::path::PathBuf {
 }
 
 fn sanitize_id(id: &str) -> String {
-    // Distinguish separators so distinct IDs (e.g. "a/b" vs "a-b") do not
-    // collide into the same directory name.
-    id.chars()
+    // The readable part distinguishes common separators; the FNV-1a suffix
+    // keeps the mapping collision-free for IDs that sanitize alike
+    // (e.g. "ghcr.io/a-b" and "ghcr.io/a_b").
+    let readable: String = id
+        .chars()
         .map(|c| {
             if c.is_alphanumeric() {
                 c
@@ -482,7 +484,13 @@ fn sanitize_id(id: &str) -> String {
                 '_'
             }
         })
-        .collect()
+        .collect();
+    let mut hash: u64 = 14695981039346656037;
+    for b in id.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    format!("{readable}-{:08x}", hash as u32)
 }
 
 fn run_output(cmd: &mut std::process::Command, desc: &str) -> Result<(bool, String)> {
@@ -1152,19 +1160,19 @@ mod tests {
 
     #[test]
     fn test_sanitize_id() {
-        assert_eq!(
-            sanitize_id("ghcr.io/devcontainers/features/common-utils:2"),
-            "ghcr_io-devcontainers-features-common_utils_2"
-        );
+        let id = "ghcr.io/devcontainers/features/common-utils:2";
+        let sanitized = sanitize_id(id);
+        assert!(sanitized.starts_with("ghcr_io-devcontainers-features-common_utils_2-"));
+        // Stable for the same id
+        assert_eq!(sanitized, sanitize_id(id));
     }
 
     #[test]
     fn test_sanitize_id_special_and_unicode() {
-        assert_eq!(sanitize_id("a b@c"), "a_b_c");
-        // Unicode alphanumerics are preserved
-        assert_eq!(sanitize_id("日本語"), "日本語");
-        assert_ne!(sanitize_id("ghcr.io/a/b"), sanitize_id("ghcr.io/a_b"));
-        assert_eq!(sanitize_id(""), "");
+        assert!(sanitize_id("a b@c").starts_with("a_b_c-"));
+        // Unicode alphanumerics are preserved in the readable part
+        assert!(sanitize_id("日本語").starts_with("日本語-"));
+        assert!(sanitize_id("").starts_with('-'));
     }
 
     #[test]
@@ -1178,6 +1186,9 @@ mod tests {
     #[test]
     fn test_sanitize_id_no_collision() {
         assert_ne!(sanitize_id("ghcr.io/a/b"), sanitize_id("ghcr.io/a-b"));
+        // Separators that previously sanitized to the same string
+        assert_ne!(sanitize_id("ghcr.io/a-b"), sanitize_id("ghcr.io/a_b"));
+        assert_ne!(sanitize_id("ghcr.io/a/b"), sanitize_id("ghcr.io/a_b"));
     }
 
     #[test]

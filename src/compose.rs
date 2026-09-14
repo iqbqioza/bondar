@@ -600,43 +600,47 @@ fn cleanup_override(override_path: Option<PathBuf>) {
 
 pub fn get_service_container_id(
     config: &DevContainerConfig,
-    config_path: &Path,
+    _config_path: &Path,
     workspace_folder: &Path,
 ) -> Result<String> {
     let service = config
         .service
         .as_deref()
         .ok_or_else(|| BondarError::Config("No service specified".to_string()))?;
-    let (mut cmd, override_path) = compose_base_command(config, config_path, workspace_folder)?;
-    cmd.arg("ps");
-    // Include stopped containers: a stopped service still exists and must be
-    // restarted instead of treated as a fresh creation (which would re-run
-    // create-time lifecycle hooks and features).
-    cmd.arg("-a");
-    cmd.arg("-q");
-    cmd.arg(service);
-    cmd.current_dir(workspace_folder);
-    let output = match cmd.output() {
-        Ok(o) => o,
-        Err(e) => {
-            cleanup_override(override_path);
-            return Err(BondarError::Docker(format!(
-                "Failed to run docker compose ps: {e}"
-            )));
-        }
-    };
-    cleanup_override(override_path);
+    // Find the service container by compose labels. `docker compose ps -a`
+    // also lists one-off containers created by `docker compose run`, which
+    // must never be treated as the service container, so filter them out via
+    // the `com.docker.compose.oneoff` label.
+    let project = crate::docker::compose_project_name(workspace_folder);
+    let output = std::process::Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+            "--filter",
+            &format!("label=com.docker.compose.service={service}"),
+            "--format",
+            "{{.ID}}\t{{.Label \"com.docker.compose.oneoff\"}}",
+        ])
+        .output()
+        .map_err(|e| BondarError::Docker(format!("Failed to run docker ps: {e}")))?;
     if !output.status.success() {
-        return Err(BondarError::Docker("docker compose ps failed".to_string()));
+        return Err(BondarError::Docker("docker ps failed".to_string()));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let id = stdout.lines().next().unwrap_or("").trim().to_string();
-    if id.is_empty() {
-        return Err(BondarError::Docker(format!(
-            "Service {service} container not found"
-        )));
+    for line in stdout.lines() {
+        let mut parts = line.split('\t');
+        let Some(id) = parts.next() else { continue };
+        let oneoff = parts.next().unwrap_or("").trim();
+        let id = id.trim();
+        if !id.is_empty() && oneoff != "True" {
+            return Ok(id.to_string());
+        }
     }
-    Ok(id)
+    Err(BondarError::Docker(format!(
+        "Service {service} container not found"
+    )))
 }
 
 /// Whether the service container already exists, and if so, whether it is running.
