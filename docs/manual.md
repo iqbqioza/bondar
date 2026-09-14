@@ -262,7 +262,7 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand`. bondar
 
 - Features are fetched with `oras` (or `docker pull` as a fallback), extracted if needed, copied into the container, and executed via `install.sh` as root.
 - Options are passed as environment variables to `install.sh` (`installsAfter` is excluded).
-- `installsAfter` declared in the `devcontainer.json` feature entry orders features; unknown dependencies are warned. A feature's own `installsAfter` metadata is also used for ordering; `overrideFeatureInstallOrder` takes precedence over both. Override entries may omit the version tag (`ghcr.io/.../feature`), as in the spec.
+- `installsAfter` declared in the `devcontainer.json` feature entry orders features; unknown dependencies are warned. A feature's own `installsAfter` metadata is also used for ordering; `overrideFeatureInstallOrder` takes precedence over both. Entries may omit the version tag (e.g. `ghcr.io/.../feature`), as in the spec.
 - `dependsOn` declared in feature metadata installs the dependencies (with the options given there) before the feature, recursively. Circular dependencies are warned and skipped.
 - Container properties declared by features (`containerEnv`, `mounts`, `privileged`, `init`, `capAdd`, `securityOpt`) are merged into the container configuration before creation (for image/Dockerfile configs and through the compose override). User `containerEnv` values win over feature values.
 - Deprecated features (`"deprecated": true`) are warned about.
