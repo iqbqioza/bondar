@@ -1005,3 +1005,32 @@ fn test_compose_one_off_container_is_ignored() {
     }
     cleanup(&ws);
 }
+
+#[test]
+fn test_down_default_has_no_unknown_action_warning() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "down-default",
+        r#"{"name": "int-down-default", "image": "ubuntu:22.04", "workspaceFolder": "/workspace"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+
+    // `down` on a non-existent container uses the internal "remove" default
+    // and must not warn about an unknown shutdownAction.
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(
+        down.status.success(),
+        "down failed: {}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&down.stderr);
+    assert!(
+        !stderr.contains("unknown shutdownAction"),
+        "spurious warning: {stderr}"
+    );
+
+    cleanup(&ws);
+}
