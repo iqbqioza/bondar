@@ -947,6 +947,57 @@ fn read_feature_metadata(dir: &Path) -> Option<serde_json::Value> {
     None
 }
 
+/// String form of a feature option value (booleans/numbers are stringified so
+/// they can be compared with `enum` entries declared as strings).
+fn option_value_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// User-provided feature option values that are not allowed by the feature's
+/// declared `enum` (the spec treats these as strict values).
+fn invalid_feature_option_values(id: &str, opts: &serde_json::Value, dir: &Path) -> Vec<String> {
+    let Some(meta) = read_feature_metadata(dir) else {
+        return Vec::new();
+    };
+    let Some(declared) = meta.get("options").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    let Some(provided) = opts.as_object() else {
+        return Vec::new();
+    };
+    let mut messages = Vec::new();
+    for (name, spec) in declared {
+        let Some(value) = provided.get(name) else {
+            continue;
+        };
+        let Some(allowed) = spec.get("enum").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let value_str = option_value_string(value);
+        if !allowed
+            .iter()
+            .any(|allowed| option_value_string(allowed) == value_str)
+        {
+            let allowed: Vec<String> = allowed.iter().map(option_value_string).collect();
+            messages.push(format!(
+                "Warning: feature '{id}' option '{name}' value '{value_str}' is not one of the allowed values {allowed:?}"
+            ));
+        }
+    }
+    messages
+}
+
+/// Warn when a user-provided feature option value is not allowed by the
+/// feature's declared `enum`.
+fn warn_invalid_feature_option_values(id: &str, opts: &serde_json::Value, dir: &Path) {
+    for message in invalid_feature_option_values(id, opts, dir) {
+        eprintln!("{message}");
+    }
+}
+
 /// Fill in defaults declared in the feature metadata for options the user
 /// omitted; the spec requires omitted options to be exported with their
 /// default values when `install.sh` runs. User-provided values win and options
@@ -1070,6 +1121,9 @@ fn install_fetched_feature(
             println!("  Feature declares installsAfter: {deps:?}");
         }
     }
+
+    // Warn about user-provided option values that the feature does not allow
+    warn_invalid_feature_option_values(id, opts, dest_dir);
 
     // Apply defaults for omitted options declared in the feature metadata
     let effective_opts = merge_feature_option_defaults(opts, dest_dir);
@@ -1455,6 +1509,31 @@ mod tests {
         for id in [dep, main] {
             let _ = std::fs::remove_dir_all(feature_cache_dir().join(sanitize_id(id)));
         }
+    }
+
+    #[test]
+    fn test_invalid_feature_option_values() {
+        let dir = std::env::temp_dir().join("bondar-feature-enum-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("devcontainer-feature.json"),
+            r#"{"options":{"version":{"type":"string","enum":["18","20"]},"flag":{"type":"boolean","enum":[true,false]}}}"#,
+        )
+        .unwrap();
+        // Valid values produce no messages (boolean compared as string)
+        let valid = serde_json::json!({"version": "18", "flag": true});
+        assert!(invalid_feature_option_values("ghcr.io/a/b", &valid, &dir).is_empty());
+        // Invalid values are reported
+        let invalid = serde_json::json!({"version": "19", "flag": "maybe"});
+        let messages = invalid_feature_option_values("ghcr.io/a/b", &invalid, &dir);
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].contains("version"));
+        assert!(messages[1].contains("flag"));
+        // Unknown option names are ignored
+        let unknown = serde_json::json!({"other": "x"});
+        assert!(invalid_feature_option_values("ghcr.io/a/b", &unknown, &dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
