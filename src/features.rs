@@ -1205,6 +1205,9 @@ fn effective_feature_opts(id: &str, opts: &serde_json::Value) -> serde_json::Val
 /// (e.g. its cache directory could not be created).
 fn fetch_feature_to_cache(id: &str) -> Result<Option<PathBuf>> {
     let dest_dir = feature_cache_dir().join(sanitize_id(id));
+    // Remove leftovers from an earlier fetch so the cache matches the artifact
+    // exactly (docker cp/oras do not delete files that disappeared upstream).
+    let _ = std::fs::remove_dir_all(&dest_dir);
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         eprintln!("  Warning: could not create feature directory: {e}");
         return Ok(None);
