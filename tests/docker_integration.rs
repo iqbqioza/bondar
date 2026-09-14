@@ -1243,3 +1243,37 @@ fn test_compose_stop_container_only_primary() {
         .output();
     cleanup(&ws);
 }
+
+#[test]
+fn test_stale_container_config_warning() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let content = r#"{"name": "int-stale", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#;
+    let ws = make_workspace("stale", content);
+    let ws_str = ws.to_str().unwrap();
+
+    let up1 = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(up1.status.success());
+
+    // Starting the same container through a different config file warns
+    let alt = ws.join("alt.json");
+    std::fs::write(&alt, content).unwrap();
+    let alt_str = alt.to_str().unwrap();
+    let up2 = bondar(&["up", "--workspace-folder", ws_str, "--config", alt_str]);
+    assert!(
+        up2.status.success(),
+        "second up failed: {}",
+        String::from_utf8_lossy(&up2.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&up2.stderr).contains("different config file"),
+        "expected stale config warning: {}",
+        String::from_utf8_lossy(&up2.stderr)
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str, "--config", alt_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}

@@ -310,6 +310,22 @@ pub fn ensure_container_matches_workspace(name: &str, workspace_folder: &Path) -
     }
 }
 
+/// All labels of a container (empty when it does not exist).
+pub fn container_labels(name: &str) -> std::collections::HashMap<String, String> {
+    let output = Command::new("docker")
+        .args(["inspect", "--format", "{{json .Config.Labels}}", name])
+        .output();
+    let Ok(output) = output else {
+        return std::collections::HashMap::new();
+    };
+    if !output.status.success() {
+        return std::collections::HashMap::new();
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<std::collections::HashMap<String, String>>(raw.trim())
+        .unwrap_or_default()
+}
+
 pub fn container_running(name: &str) -> Result<bool> {
     let output = Command::new("docker")
         .args(["ps", "--format", "{{.Names}}"])
@@ -429,10 +445,29 @@ pub fn create_and_start_container(
         if remove_existing {
             println!("Removing existing container {container_name}...");
             remove_container(container_name)?;
-        } else if running {
+        } else {
+            let labels = container_labels(container_name);
+            let current_config = config_path.display().to_string();
+            if let Some(previous) = labels.get("devcontainer.config_file")
+                && previous != &current_config
+            {
+                eprintln!(
+                    "Warning: container {container_name} was created from a different config file ({previous}); use --remove-existing-container to recreate it"
+                );
+            }
+            if let Some(previous) = labels.get("devcontainer.image")
+                && previous != image_name
+            {
+                eprintln!(
+                    "Warning: container {container_name} was created from image '{previous}' (current: '{image_name}'); use --remove-existing-container to recreate it"
+                );
+            }
+        }
+        if !remove_existing && running {
             println!("Container {container_name} is already running");
             return Ok(());
-        } else {
+        }
+        if !remove_existing {
             println!("Starting existing container {container_name}...");
             let status = Command::new("docker")
                 .args(["start", container_name])
@@ -506,6 +541,8 @@ pub fn create_and_start_container(
     let devcontainer_id = devcontainer_id_for(workspace_folder);
     cmd.arg("--label")
         .arg(format!("devcontainer.id={devcontainer_id}"));
+    cmd.arg("--label")
+        .arg(format!("devcontainer.image={image_name}"));
 
     if let Some(attrs) = &config.ports_attributes {
         let json_str = serde_json::to_string(attrs).unwrap_or_default();
