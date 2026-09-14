@@ -377,6 +377,22 @@ impl DevContainerConfig {
                 ));
             }
         }
+        if let Some(build) = &self.build {
+            for opt in &build.options {
+                if opt.trim().is_empty() {
+                    return Err(BondarError::Config(
+                        "'build.options' entries must not be empty".to_string(),
+                    ));
+                }
+            }
+            for key in build.args.keys() {
+                if key.trim().is_empty() {
+                    return Err(BondarError::Config(
+                        "'build.args' keys must not be empty".to_string(),
+                    ));
+                }
+            }
+        }
         if let Some(f) = &self.docker_compose_file {
             let empty = match f {
                 ComposeFileValue::Single(s) => s.trim().is_empty(),
@@ -870,6 +886,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
         let _ = std::fs::remove_dir_all(&dir3);
+    }
+
+    #[test]
+    fn test_validate_empty_build_options_and_args() {
+        let bad_opt: DevContainerConfig = serde_json::from_str(
+            r#"{"build": {"dockerfile": "Dockerfile", "options": ["", "--pull"]}}"#,
+        )
+        .unwrap();
+        assert!(bad_opt.validate().is_err());
+
+        let bad_arg: DevContainerConfig =
+            serde_json::from_str(r#"{"build": {"dockerfile": "Dockerfile", "args": {"": "v"}}}"#)
+                .unwrap();
+        assert!(bad_arg.validate().is_err());
+
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"build": {"dockerfile": "Dockerfile", "options": ["--pull"], "args": {"A": "b"}}}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]
