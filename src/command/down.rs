@@ -54,8 +54,11 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             println!("Container {container_name} removed");
         }
         _ => {
-            // Already validated in config::validate, but handle defensively
-            eprintln!("Warning: unknown shutdownAction '{shutdown}'; treating as remove");
+            // "remove" is the default; anything else is already rejected by
+            // config::validate but handled defensively here
+            if shutdown != "remove" {
+                eprintln!("Warning: unknown shutdownAction '{shutdown}'; treating as remove");
+            }
             if !exists {
                 println!("Container {container_name} does not exist");
                 return Ok(());
