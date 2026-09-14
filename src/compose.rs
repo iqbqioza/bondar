@@ -707,32 +707,36 @@ pub fn compose_exec(
     if let Some(w) = workdir {
         cmd.arg("-w").arg(w);
     }
+    // `${containerWorkspaceFolder}` expansions always use the configured
+    // workspace folder, even when `--workdir` overrides the working directory.
+    let container_workspace = config
+        .workspace_folder
+        .clone()
+        .unwrap_or_else(|| "/".to_string());
     if let Some(env_map) = env {
         // Resolve ${containerEnv:KEY} references against the containerEnv map
         let container_env_map: std::collections::HashMap<String, String> = config
             .container_env
             .iter()
             .map(|(k, v)| {
-                let target = workdir.unwrap_or("/");
                 let resolved = crate::docker::resolve_container_env_value(v, &config.container_env);
                 (
                     k.clone(),
                     crate::docker::expand_vars_for_host_with_target(
                         &resolved,
                         workspace_folder,
-                        target,
+                        &container_workspace,
                     ),
                 )
             })
             .collect();
         for (k, v) in env_map {
-            let target = workdir.unwrap_or("/");
             let from_map =
                 crate::docker::expand_container_env_from_map(v, &container_env_map, None);
             let expanded = crate::docker::expand_vars_for_host_with_target(
                 &from_map,
                 workspace_folder,
-                target,
+                &container_workspace,
             );
             cmd.arg("-e").arg(format!("{k}={expanded}"));
         }
