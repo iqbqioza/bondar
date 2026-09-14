@@ -300,12 +300,45 @@ fn feature_ids_in_order(
 /// Sorted feature ids for cases where no installation happened (e.g. a
 /// container restart), so cached metadata is still processed deterministically.
 pub fn feature_ids_sorted(features: &Option<HashMap<String, serde_json::Value>>) -> Vec<String> {
-    let mut ids: Vec<String> = features
+    // Traverse `dependsOn` from cached metadata so dependencies are included
+    // (and run first) even when no installation happens in this invocation
+    // (e.g. a container restart).
+    fn visit(id: &str, result: &mut Vec<String>, visiting: &mut std::collections::HashSet<String>) {
+        if result.iter().any(|existing| existing == id) {
+            return;
+        }
+        if !visiting.insert(id.to_string()) {
+            return;
+        }
+        let dir = feature_cache_dir().join(sanitize_id(id));
+        if let Some(meta) = read_feature_metadata(&dir)
+            && let Some(deps) = meta.get("dependsOn").and_then(|v| v.as_object())
+        {
+            let mut dep_ids: Vec<&String> = deps.keys().collect();
+            dep_ids.sort();
+            for dep_id in dep_ids {
+                if dep_id.as_str() != id {
+                    visit(dep_id, result, visiting);
+                }
+            }
+        }
+        visiting.remove(id);
+        if !result.iter().any(|existing| existing == id) {
+            result.push(id.to_string());
+        }
+    }
+
+    let mut seeds: Vec<String> = features
         .as_ref()
         .map(|map| map.keys().cloned().collect())
         .unwrap_or_default();
-    ids.sort();
-    ids
+    seeds.sort();
+    let mut result = Vec::new();
+    let mut visiting = std::collections::HashSet::new();
+    for id in &seeds {
+        visit(id, &mut result, &mut visiting);
+    }
+    result
 }
 
 /// Collect lifecycle commands declared by features (from cached metadata), in
@@ -1389,6 +1422,37 @@ mod tests {
         let merged = collect_feature_customizations(&features, &order);
         assert_eq!(merged["vscode"]["x"], "a");
         for id in [id_a, id_b] {
+            let _ = std::fs::remove_dir_all(feature_cache_dir().join(sanitize_id(id)));
+        }
+    }
+
+    #[test]
+    fn test_feature_ids_sorted_includes_cached_dependencies() {
+        let dep = "ghcr.io/test/restart-dep";
+        let main = "ghcr.io/test/restart-main";
+        let dep_meta = r#"{"id":"restart-dep","version":"1.0.0","name":"dep"}"#.to_string();
+        let main_meta = format!(
+            r#"{{"id":"restart-main","version":"1.0.0","name":"main","dependsOn":{{"{dep}":{{}}}}}}"#
+        );
+        for (id, meta) in [(dep, dep_meta), (main, main_meta)] {
+            let dir = feature_cache_dir().join(sanitize_id(id));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("devcontainer-feature.json"), meta).unwrap();
+        }
+        let features = Some(HashMap::from([(main.to_string(), serde_json::json!({}))]));
+        assert_eq!(
+            feature_ids_sorted(&features),
+            vec![dep.to_string(), main.to_string()]
+        );
+        // Missing cache metadata still yields the requested id
+        let uncached = "ghcr.io/test/restart-uncached";
+        let features2 = Some(HashMap::from([(
+            uncached.to_string(),
+            serde_json::json!({}),
+        )]));
+        assert_eq!(feature_ids_sorted(&features2), vec![uncached.to_string()]);
+        for id in [dep, main] {
             let _ = std::fs::remove_dir_all(feature_cache_dir().join(sanitize_id(id)));
         }
     }
