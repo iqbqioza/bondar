@@ -22,7 +22,7 @@ pub fn run(
     }
 
     let ws = docker::get_workspace_folder(workspace_folder)?;
-    let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+    let (mut cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
     if no_build && !cfg.effective_has_build() && cfg.docker_compose_file.is_none() {
         eprintln!("Warning: --no-build has no effect (no 'build' section configured)");
@@ -78,6 +78,13 @@ pub fn run(
     // never attach to, start or remove another workspace's container.
     if was_existing {
         docker::ensure_container_matches_workspace(&container_name, &ws)?;
+    }
+
+    // Feature-declared container properties (env, mounts, privileged, ...)
+    // must be merged before the container is created.
+    if !was_existing || remove_existing {
+        let feature_props = crate::features::prefetch_feature_container_properties(&cfg.features)?;
+        crate::features::apply_feature_container_properties(&mut cfg, &feature_props);
     }
 
     // Warn if another container exists for the same workspace (name collision)
@@ -464,6 +471,16 @@ fn run_compose(
     }
 
     let (was_existing, was_running) = crate::compose::service_container_state(cfg, cfg_path, ws)?;
+
+    // Feature-declared container properties must be known before the compose
+    // override is generated and the services start.
+    let mut merged_cfg = cfg.clone();
+    if !was_existing || remove_existing {
+        let feature_props =
+            crate::features::prefetch_feature_container_properties(&merged_cfg.features)?;
+        crate::features::apply_feature_container_properties(&mut merged_cfg, &feature_props);
+    }
+    let cfg = &merged_cfg;
 
     if let Some(cmd) = &cfg.initialize_command {
         println!("Running initializeCommand on host...");

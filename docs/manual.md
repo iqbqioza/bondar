@@ -262,8 +262,9 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand`. bondar
 
 - Features are fetched with `oras` (or `docker pull` as a fallback), extracted if needed, copied into the container, and executed via `install.sh` as root.
 - Options are passed as environment variables to `install.sh` (`installsAfter` is excluded).
-- `installsAfter` declared in the `devcontainer.json` feature entry orders features; unknown dependencies are warned. A feature's own `installsAfter` metadata (when available in the feature cache) is also used for ordering; `overrideFeatureInstallOrder` takes precedence over both.
+- `installsAfter` declared in the `devcontainer.json` feature entry orders features; unknown dependencies are warned. A feature's own `installsAfter` metadata is also used for ordering; `overrideFeatureInstallOrder` takes precedence over both.
 - `dependsOn` declared in feature metadata installs the dependencies (with the options given there) before the feature, recursively. Circular dependencies are warned and skipped.
+- Container properties declared by features (`containerEnv`, `mounts`, `privileged`, `init`, `capAdd`, `securityOpt`) are merged into the container configuration before creation (for image/Dockerfile configs and through the compose override). User `containerEnv` values win over feature values.
 - Features are installed only when the container is created, not on restart.
 - Lifecycle commands declared in feature metadata (`onCreateCommand` ... `postAttachCommand`) run before the user's corresponding lifecycle commands.
 - `customizations` declared by features are merged (objects merged, arrays unioned) and stored as a container label.
@@ -282,7 +283,7 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand`. bondar
 
 - `dockerComposeFile` may be a string or an array; paths are relative to `devcontainer.json`, and `${localWorkspaceFolder}` expands to the workspace root.
 - `runServices` starts additional services on top of the primary `service`, which is always started.
-- `containerEnv`, `secrets`, `forwardPorts`, `appPort` and `mounts` are injected via a generated `compose.override.yml` (in the OS temp directory).
+- `containerEnv`, `secrets`, `forwardPorts`, `appPort`, `mounts`, `privileged`, `init`, `capAdd` and `securityOpt` are injected via a generated `compose.override.yml` (in the OS temp directory); named volumes are declared in the override.
 - `--remove-existing-container` passes `--force-recreate`; `--no-build` passes `--no-build`.
 - Each workspace gets a stable per-workspace compose project name (`bondar-<hash>`), so workspaces with the same directory name never share containers, networks or override files.
 
