@@ -6,48 +6,10 @@ use std::process::{Command, Stdio};
 use crate::config::{DevContainerConfig, MountValue};
 use crate::error::{BondarError, Result};
 
-/// Parse the `devcontainer.metadata` image label (a JSON array of partial
-/// configurations, or a single object) and return the merged `remoteUser` and
-/// `containerUser` defaults.
-pub fn parse_image_user_defaults(raw: &str) -> (Option<String>, Option<String>) {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return (None, None);
-    }
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return (None, None);
-    };
-    let entries: Vec<&serde_json::Value> = match &value {
-        serde_json::Value::Array(items) => items.iter().collect(),
-        other => vec![other],
-    };
-    let mut remote_user = None;
-    let mut container_user = None;
-    for entry in entries {
-        if let Some(user) = entry.get("remoteUser").and_then(|v| v.as_str())
-            && !user.is_empty()
-        {
-            remote_user = Some(user.to_string());
-        }
-        if let Some(user) = entry.get("containerUser").and_then(|v| v.as_str())
-            && !user.is_empty()
-        {
-            container_user = Some(user.to_string());
-        }
-    }
-    (remote_user, container_user)
-}
-
-/// Read the `devcontainer.metadata` label of an image. When the image is not
-/// available locally it is pulled first (docker run would pull it anyway).
-pub fn image_user_defaults(image: &str) -> (Option<String>, Option<String>) {
-    inspect_image_user_defaults(image, true)
-}
-
-fn inspect_image_user_defaults(
-    image: &str,
-    pull_if_missing: bool,
-) -> (Option<String>, Option<String>) {
+/// Raw `devcontainer.metadata` label of an image. When the image is not
+/// available locally it is pulled first if requested (docker run would pull it
+/// anyway).
+pub fn image_metadata_label(image: &str, pull_if_missing: bool) -> Option<String> {
     let inspect = || {
         Command::new("docker")
             .args([
@@ -59,13 +21,10 @@ fn inspect_image_user_defaults(
             ])
             .output()
     };
-    let mut output = match inspect() {
-        Ok(o) => o,
-        Err(_) => return (None, None),
-    };
+    let mut output = inspect().ok()?;
     if !output.status.success() {
         if !pull_if_missing {
-            return (None, None);
+            return None;
         }
         // Pull quietly; a real pull failure is reported by docker run later
         let _ = Command::new("docker")
@@ -73,37 +32,31 @@ fn inspect_image_user_defaults(
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
-        output = match inspect() {
-            Ok(o) => o,
-            Err(_) => return (None, None),
-        };
+        output = inspect().ok()?;
     }
     if !output.status.success() {
-        return (None, None);
+        return None;
     }
-    let raw = String::from_utf8_lossy(&output.stdout);
-    parse_image_user_defaults(&raw)
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() { None } else { Some(raw) }
 }
 
-/// Resolve `remoteUser`/`containerUser` defaults from the image a container runs.
-pub fn container_image_user_defaults(container: &str) -> (Option<String>, Option<String>) {
+/// Raw `devcontainer.metadata` label of the image a container runs. Never
+/// pulls: the container may use an image that was retagged or removed locally,
+/// and pulling the name could resolve to a different image.
+pub fn container_metadata_label(container: &str) -> Option<String> {
     let output = Command::new("docker")
         .args(["inspect", "--format", "{{.Config.Image}}", container])
-        .output();
-    let Ok(output) = output else {
-        return (None, None);
-    };
+        .output()
+        .ok()?;
     if !output.status.success() {
-        return (None, None);
+        return None;
     }
     let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if image.is_empty() {
-        return (None, None);
+        return None;
     }
-    // Never pull here: the container may be running from an image that was
-    // retagged or removed locally, and pulling the name could resolve to a
-    // different image with different metadata.
-    inspect_image_user_defaults(&image, false)
+    image_metadata_label(&image, false)
 }
 
 pub fn check_docker_available() -> Result<()> {
@@ -1383,29 +1336,6 @@ pub fn get_workspace_folder(provided: Option<PathBuf>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_image_user_defaults() {
-        // Array form (later entries win)
-        assert_eq!(
-            parse_image_user_defaults(
-                r#"[{"remoteUser":"vscode"},{"remoteUser":"node","containerUser":"root"}]"#
-            ),
-            (Some("node".to_string()), Some("root".to_string()))
-        );
-        // Single object
-        assert_eq!(
-            parse_image_user_defaults(r#"{"remoteUser":"vscode"}"#),
-            (Some("vscode".to_string()), None)
-        );
-        // Empty / invalid / unrelated metadata
-        assert_eq!(parse_image_user_defaults(""), (None, None));
-        assert_eq!(parse_image_user_defaults("not json"), (None, None));
-        assert_eq!(
-            parse_image_user_defaults(r#"[{"id":"features/x"}]"#),
-            (None, None)
-        );
-    }
 
     #[test]
     fn test_publish_port_arg_number() {

@@ -308,7 +308,7 @@ Warnings are emitted when the host does not satisfy the requirements (not enforc
 
 ## Lifecycle of the container user
 
-When `remoteUser`/`containerUser` are not set in `devcontainer.json`, they are inherited from the image's `devcontainer.metadata` label (like the reference CLI).
+The image's `devcontainer.metadata` label (as produced for prebuilt images with features) is merged like the reference CLI: `remoteUser`, `containerUser`, `userEnvProbe` and `overrideCommand` when unset, plus `containerEnv`, `mounts`, `privileged`, `init`, `capAdd` and `securityOpt` (user values take precedence for `containerEnv`).
 
 `updateRemoteUserUID` (default `true`) synchronizes the `remoteUser`/`containerUser` UID and GID with the host:
 
