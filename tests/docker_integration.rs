@@ -330,6 +330,19 @@ fn test_read_configuration() {
         String::from_utf8_lossy(&udp.stderr)
     );
 
+    // tmpfs object mounts are supported by bondar (docker --mount)
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"image": "ubuntu:22.04", "mounts": [{"type": "tmpfs", "target": "/tmp-data"}]}"#,
+    )
+    .unwrap();
+    let tmpfs = bondar(&["read-configuration", "--workspace-folder", ws_str]);
+    assert!(
+        tmpfs.status.success(),
+        "tmpfs mount rejected: {}",
+        String::from_utf8_lossy(&tmpfs.stderr)
+    );
+
     // Invalid config (waitFor out of enum) -> exit 1
     std::fs::write(
         ws.join(".devcontainer/devcontainer.json"),
