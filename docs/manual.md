@@ -247,7 +247,7 @@ Supported variable expansion:
 - `waitFor` accepts `initializeCommand`, `onCreateCommand`, `updateContentCommand`, `postCreateCommand`, `postStartCommand`; scripts after the selected one run in the background.
 - Script failures stop subsequent scripts.
 
-Note: the devcontainer spec defaults `waitFor` to `updateContentCommand` (so later scripts run in the background while an editor starts). bondar runs all lifecycle scripts synchronously unless `waitFor` is set, since a terminal CLI has no UI to start.
+Note: the devcontainer spec defaults `waitFor` to `updateContentCommand`. bondar follows this default, so when `waitFor` is omitted, `postCreateCommand` and later scripts run in the background; set `waitFor` explicitly to wait for them.
 
 ### Features
 
@@ -262,7 +262,7 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand` (so lat
 
 - Features are fetched with `oras` (or `docker pull` as a fallback), extracted if needed, copied into the container, and executed via `install.sh` as root.
 - Options are passed as environment variables to `install.sh` (`installsAfter` is excluded).
-- `installsAfter` declared in the `devcontainer.json` feature entry orders independent features; unknown dependencies are warned. The `installsAfter` value found in a feature's own metadata is reported but does not reorder already-determined install steps.
+- `installsAfter` declared in the `devcontainer.json` feature entry orders features; unknown dependencies are warned. A feature's own `installsAfter` metadata (when available in the feature cache) is also used for ordering; `overrideFeatureInstallOrder` takes precedence over both.
 - Features are installed only when the container is created, not on restart.
 - `customizations` declared by features are merged and stored as a container label.
 

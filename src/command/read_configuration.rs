@@ -156,12 +156,10 @@ pub fn run(
             "Mode: Docker Compose (service: {}, file: {file_str})",
             cfg.service.as_deref().unwrap_or("unknown")
         );
-    } else if cfg.build.is_some() {
+    } else if cfg.effective_has_build() {
         let dockerfile = cfg
-            .build
-            .as_ref()
-            .and_then(|b| b.dockerfile.as_deref())
-            .unwrap_or("Dockerfile");
+            .effective_dockerfile()
+            .unwrap_or_else(|| "Dockerfile".to_string());
         println!("Mode: Build (dockerfile: {dockerfile})");
     } else {
         println!(
@@ -200,10 +198,13 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         .chain(cfg.remote_env.iter().map(|(k, v)| (k, v.as_deref())))
         .collect();
     // Collect secret values to avoid leaking them via ${localEnv:} expansion in
-    // containerEnv/remoteEnv (e.g. "TOKEN": "${localEnv:SECRET_TOKEN}")
+    // containerEnv/remoteEnv (e.g. "TOKEN": "${localEnv:SECRET_TOKEN}").
+    // Empty secret values are ignored: masking is substring-based, so an empty
+    // value would mask every environment variable.
     let secret_values: std::collections::HashSet<String> = docker::resolve_secrets(cfg)
         .into_iter()
         .map(|(_, v)| v)
+        .filter(|v| !v.is_empty())
         .collect();
     for (k, v) in &all_env {
         let Some(val) = v else {

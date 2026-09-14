@@ -133,6 +133,7 @@ pub fn run(
             &cfg.override_feature_install_order,
             Some(&container_name),
             cfg.remote_user.as_deref(),
+            cfg.container_user.as_deref(),
         )?;
 
         // Store merged feature customizations as a container label
@@ -428,6 +429,7 @@ fn run_compose(
                     &cfg.override_feature_install_order,
                     Some(&name),
                     cfg.remote_user.as_deref(),
+                    cfg.container_user.as_deref(),
                 )?;
             }
             name

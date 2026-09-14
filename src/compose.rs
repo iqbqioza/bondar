@@ -201,6 +201,14 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                     } else {
                         volumes.push(vol);
                     }
+                } else if expanded.split(',').any(|p| p.trim() == "type=tmpfs") {
+                    eprintln!(
+                        "Warning: tmpfs mount is skipped in compose override (no short-syntax equivalent)"
+                    );
+                } else {
+                    eprintln!(
+                        "Warning: mount '{expanded}' is skipped in compose override (cannot convert to short syntax)"
+                    );
                 }
             }
             MountValue::Object(obj) => {
@@ -543,6 +551,10 @@ pub fn get_service_container_id(
         .ok_or_else(|| BondarError::Config("No service specified".to_string()))?;
     let (mut cmd, override_path) = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("ps");
+    // Include stopped containers: a stopped service still exists and must be
+    // restarted instead of treated as a fresh creation (which would re-run
+    // create-time lifecycle hooks and features).
+    cmd.arg("-a");
     cmd.arg("-q");
     cmd.arg(service);
     cmd.current_dir(workspace_folder);

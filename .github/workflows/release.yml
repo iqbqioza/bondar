@@ -88,6 +88,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history and tags are needed to list commits since the previous tag
+          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -108,7 +111,7 @@ jobs:
         env:
           REF: ${{ github.ref_name }}
         run: |
-          PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
           cp .github/release-notes.md release-notes.md
           {
             echo ""
