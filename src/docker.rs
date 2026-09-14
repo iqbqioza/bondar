@@ -38,9 +38,16 @@ pub fn parse_image_user_defaults(raw: &str) -> (Option<String>, Option<String>) 
     (remote_user, container_user)
 }
 
-/// Read the `devcontainer.metadata` label of an image. The image is pulled when
-/// it is not available locally (docker run would pull it anyway).
+/// Read the `devcontainer.metadata` label of an image. When the image is not
+/// available locally it is pulled first (docker run would pull it anyway).
 pub fn image_user_defaults(image: &str) -> (Option<String>, Option<String>) {
+    inspect_image_user_defaults(image, true)
+}
+
+fn inspect_image_user_defaults(
+    image: &str,
+    pull_if_missing: bool,
+) -> (Option<String>, Option<String>) {
     let inspect = || {
         Command::new("docker")
             .args([
@@ -57,6 +64,9 @@ pub fn image_user_defaults(image: &str) -> (Option<String>, Option<String>) {
         Err(_) => return (None, None),
     };
     if !output.status.success() {
+        if !pull_if_missing {
+            return (None, None);
+        }
         // Pull quietly; a real pull failure is reported by docker run later
         let _ = Command::new("docker")
             .args(["pull", image])
@@ -90,7 +100,10 @@ pub fn container_image_user_defaults(container: &str) -> (Option<String>, Option
     if image.is_empty() {
         return (None, None);
     }
-    image_user_defaults(&image)
+    // Never pull here: the container may be running from an image that was
+    // retagged or removed locally, and pulling the name could resolve to a
+    // different image with different metadata.
+    inspect_image_user_defaults(&image, false)
 }
 
 pub fn check_docker_available() -> Result<()> {
