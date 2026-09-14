@@ -404,10 +404,16 @@ pub fn handle_features_with_container(
 
     if let Some(order) = override_order {
         println!("Override feature install order: {order:?}");
+        // Per spec the entries omit the version tag, but versioned entries are
+        // accepted too; matching is done on the canonical (version-less) id.
         let mut missing = Vec::new();
-        for id in order {
-            if !feat_map.contains_key(id) {
-                missing.push(id.clone());
+        for entry in order {
+            let canonical = canonical_feature_id(entry);
+            if !feat_map
+                .keys()
+                .any(|key| canonical_feature_id(key) == canonical)
+            {
+                missing.push(entry.clone());
             }
         }
         if !missing.is_empty() {
@@ -416,20 +422,32 @@ pub fn handle_features_with_container(
             );
         }
         println!("Installing features in override order:");
-        let mut seen = std::collections::HashSet::new();
-        for id in order {
-            if !seen.insert(id.clone()) {
+        let mut processed = std::collections::HashSet::new();
+        for entry in order {
+            let canonical = canonical_feature_id(entry);
+            if !processed.insert(canonical.to_string()) {
                 eprintln!(
-                    "Warning: duplicate feature '{id}' in overrideFeatureInstallOrder, skipping duplicate"
+                    "Warning: duplicate feature '{entry}' in overrideFeatureInstallOrder, skipping duplicate"
                 );
                 continue;
             }
-            if let Some(opts) = feat_map.get(id) {
-                installer.install(id, opts)?;
+            let mut matched: Vec<(&String, &serde_json::Value)> = feat_map
+                .iter()
+                .filter(|(key, _)| canonical_feature_id(key) == canonical)
+                .collect();
+            matched.sort_by(|a, b| a.0.cmp(b.0));
+            for (key, opts) in matched {
+                installer.install(key, opts)?;
             }
         }
-        let mut remaining: Vec<&String> =
-            feat_map.keys().filter(|id| !order.contains(*id)).collect();
+        let mut remaining: Vec<&String> = feat_map
+            .keys()
+            .filter(|id| {
+                !order
+                    .iter()
+                    .any(|entry| canonical_feature_id(entry) == canonical_feature_id(id))
+            })
+            .collect();
         remaining.sort();
         for id in remaining {
             if let Some(opts) = feat_map.get(id) {
@@ -1075,6 +1093,15 @@ fn resolve_user_home(container: &str, user: &str) -> String {
         .unwrap_or_else(|| format!("/home/{user}"))
 }
 
+/// Feature id without its version tag ("ghcr.io/a/b:1" -> "ghcr.io/a/b").
+/// Registry ports ("localhost:5001/a/b") are not mistaken for tags.
+fn canonical_feature_id(id: &str) -> &str {
+    match id.rsplit_once(':') {
+        Some((base, tag)) if !tag.is_empty() && !tag.contains('/') => base,
+        _ => id,
+    }
+}
+
 /// Convert a user-provided feature option value to the effective options.
 /// Per spec, a string value is shorthand for the `version` option:
 /// "features": {"id": "18"} == {"id": {"version": "18"}}
@@ -1276,6 +1303,23 @@ mod tests {
         assert_eq!(option_env_name("_x"), "_X");
         assert_eq!(option_env_name("123"), "_");
         assert_eq!(option_env_name(""), "");
+    }
+
+    #[test]
+    fn test_canonical_feature_id() {
+        assert_eq!(canonical_feature_id("ghcr.io/a/b:1"), "ghcr.io/a/b");
+        assert_eq!(canonical_feature_id("ghcr.io/a/b"), "ghcr.io/a/b");
+        // Registry ports are not version tags
+        assert_eq!(
+            canonical_feature_id("localhost:5001/a/b"),
+            "localhost:5001/a/b"
+        );
+        assert_eq!(
+            canonical_feature_id("localhost:5001/a/b:2"),
+            "localhost:5001/a/b"
+        );
+        // Path segments containing ':' keep the whole id
+        assert_eq!(canonical_feature_id("ghcr.io/a/b:"), "ghcr.io/a/b:");
     }
 
     #[test]
