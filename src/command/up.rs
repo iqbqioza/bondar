@@ -109,7 +109,7 @@ pub fn run(
 
     if let Some(cmd) = &cfg.initialize_command {
         println!("Running initializeCommand on host...");
-        let host_target = cfg.workspace_folder_or_default();
+        let host_target = cfg.workspace_folder_or_default(&ws);
         lifecycle::execute_host_lifecycle_with_target(cmd, &ws, &host_target)?;
     }
 
@@ -134,7 +134,7 @@ pub fn run(
     // --remove-existing-container forced a recreate.
     let newly_created = !was_existing || remove_existing;
 
-    host::handle_update_remote_user_uid(&cfg, &container_name)?;
+    host::handle_update_remote_user_uid(&cfg, &container_name, &ws)?;
 
     // Features install once at container creation; do not re-install on
     // restart of an existing container. On restart, cached metadata still
@@ -198,7 +198,7 @@ pub fn run(
         println!("Probed {} env vars", env.len());
     }
 
-    let workspace_target = cfg.workspace_folder_or_default();
+    let workspace_target = cfg.workspace_folder_or_default(&ws);
     let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
     let container_env_map: std::collections::HashMap<String, String> = cfg
         .container_env
@@ -537,7 +537,7 @@ fn run_compose(
     // executing against a guessed name (e.g. bare service name).
     let container_name = match crate::compose::get_service_container_name(cfg, cfg_path, ws) {
         Ok(name) => {
-            host::handle_update_remote_user_uid(cfg, &name)?;
+            host::handle_update_remote_user_uid(cfg, &name, ws)?;
             name
         }
         Err(e) => {

@@ -62,14 +62,14 @@ pub fn run(
                 .clone()
                 .unwrap_or_else(|| "/".to_string())
         } else {
-            cfg.workspace_folder_or_default()
+            cfg.workspace_folder_or_default(&ws)
         })
     });
 
     let env = merged_exec_env(&cfg, &container_name, exec_user.as_deref());
     // `${containerWorkspaceFolder}` expansions always use the configured
     // workspace folder, even when `--workdir` overrides the working directory.
-    let container_workspace = cfg.workspace_folder_or_default();
+    let container_workspace = cfg.workspace_folder_or_default(&ws);
     let container_env_map: std::collections::HashMap<String, String> = cfg
         .container_env
         .iter()

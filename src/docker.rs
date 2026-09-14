@@ -52,7 +52,7 @@ pub fn build_image(
     let config_dir = config_path.parent().unwrap_or(workspace_folder);
     // ${containerWorkspaceFolder} in build inputs resolves to the configured
     // workspaceFolder (default "/workspace")
-    let workspace_target = config.workspace_folder_or_default();
+    let workspace_target = config.workspace_folder_or_default(workspace_folder);
     let dockerfile = config
         .effective_dockerfile()
         .unwrap_or_else(|| "Dockerfile".to_string());
@@ -390,7 +390,7 @@ pub fn create_and_start_container(
     }
 
     let workspace_folder_str = workspace_folder.to_string_lossy().to_string();
-    let workspace_target = config.workspace_folder_or_default();
+    let workspace_target = config.workspace_folder_or_default(workspace_folder);
 
     // The workspace path is embedded in --mount/--label values; ',' breaks the
     // docker --mount parser and '=' breaks label filters.
