@@ -636,7 +636,8 @@ fn feature_cache_dir() -> std::path::PathBuf {
 fn sanitize_id(id: &str) -> String {
     // The readable part distinguishes common separators; the FNV-1a suffix
     // keeps the mapping collision-free for IDs that sanitize alike
-    // (e.g. "ghcr.io/a-b" and "ghcr.io/a_b").
+    // (e.g. "ghcr.io/a-b" and "ghcr.io/a_b"). Cap the readable part so very
+    // long feature IDs still fit a single path component.
     let readable: String = id
         .chars()
         .map(|c| {
@@ -648,6 +649,7 @@ fn sanitize_id(id: &str) -> String {
                 '_'
             }
         })
+        .take(100)
         .collect();
     let mut hash: u64 = 14695981039346656037;
     for b in id.bytes() {
@@ -1457,6 +1459,14 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         assert!(dir.starts_with(&temp_dir));
         assert_eq!(dir.file_name().unwrap(), "bondar_features");
+    }
+
+    #[test]
+    fn test_sanitize_id_length() {
+        let long = format!("ghcr.io/a/{}", "x".repeat(300));
+        let sanitized = sanitize_id(&long);
+        // 100 readable characters + '-' + 8 hex characters
+        assert_eq!(sanitized.len(), 109);
     }
 
     #[test]

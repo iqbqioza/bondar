@@ -215,6 +215,13 @@ fn sanitize_image_suffix(input: &str) -> String {
     while out.ends_with('-') {
         out.pop();
     }
+    // Keep the final image reference well under Docker's 255 character limit
+    if out.len() > 100 {
+        out.truncate(100);
+        while out.ends_with('-') {
+            out.pop();
+        }
+    }
     if out.is_empty() {
         "workspace".to_string()
     } else {
@@ -1966,6 +1973,15 @@ mod tests {
         let symbol_hash = devcontainer_id_for(symbol_ws);
         let name = resolve_image_name(&symbol_cfg, symbol_ws).unwrap();
         assert_eq!(name, format!("bondar-workspace-{}", &symbol_hash[..8]));
+    }
+
+    #[test]
+    fn test_sanitize_image_suffix_truncates() {
+        let long = "a".repeat(300);
+        let suffix = sanitize_image_suffix(&long);
+        assert_eq!(suffix.len(), 100);
+        let with_dashes = format!("{}{}", "b".repeat(99), "-c");
+        assert_eq!(sanitize_image_suffix(&with_dashes), "b".repeat(99));
     }
 
     #[test]
