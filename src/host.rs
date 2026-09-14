@@ -19,40 +19,46 @@ pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path
     }
 
     if let Some(mem) = req.get("memory") {
-        let Some(mem_str) = mem.as_str() else {
-            eprintln!("Warning: hostRequirements.memory must be a string, got {mem}");
-            return Ok(());
-        };
-        if let Some(required_bytes) = parse_size(mem_str) {
-            if let Some(available_bytes) = available_memory_bytes()
-                && available_bytes < required_bytes
-            {
-                eprintln!(
-                    "Warning: hostRequirements.memory {mem_str} required but only {} available",
-                    format_bytes(available_bytes)
-                );
+        match mem.as_str() {
+            Some(mem_str) => {
+                if let Some(required_bytes) = parse_size(mem_str) {
+                    if let Some(available_bytes) = available_memory_bytes()
+                        && available_bytes < required_bytes
+                    {
+                        eprintln!(
+                            "Warning: hostRequirements.memory {mem_str} required but only {} available",
+                            format_bytes(available_bytes)
+                        );
+                    }
+                } else {
+                    eprintln!("Warning: invalid hostRequirements.memory format: {mem_str}");
+                }
             }
-        } else {
-            eprintln!("Warning: invalid hostRequirements.memory format: {mem_str}");
+            None => {
+                eprintln!("Warning: hostRequirements.memory must be a string, got {mem}");
+            }
         }
     }
 
     if let Some(storage) = req.get("storage") {
-        let Some(storage_str) = storage.as_str() else {
-            eprintln!("Warning: hostRequirements.storage must be a string, got {storage}");
-            return Ok(());
-        };
-        if let Some(required_bytes) = parse_size(storage_str) {
-            if let Some(available_bytes) = available_storage_bytes(_workspace_folder)
-                && available_bytes < required_bytes
-            {
-                eprintln!(
-                    "Warning: hostRequirements.storage {storage_str} required but only {} available",
-                    format_bytes(available_bytes)
-                );
+        match storage.as_str() {
+            Some(storage_str) => {
+                if let Some(required_bytes) = parse_size(storage_str) {
+                    if let Some(available_bytes) = available_storage_bytes(_workspace_folder)
+                        && available_bytes < required_bytes
+                    {
+                        eprintln!(
+                            "Warning: hostRequirements.storage {storage_str} required but only {} available",
+                            format_bytes(available_bytes)
+                        );
+                    }
+                } else {
+                    eprintln!("Warning: invalid hostRequirements.storage format: {storage_str}");
+                }
             }
-        } else {
-            eprintln!("Warning: invalid hostRequirements.storage format: {storage_str}");
+            None => {
+                eprintln!("Warning: hostRequirements.storage must be a string, got {storage}");
+            }
         }
     }
 

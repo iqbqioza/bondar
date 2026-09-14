@@ -43,6 +43,7 @@ pub fn handle_features_with_container(
     features: &Option<HashMap<String, serde_json::Value>>,
     override_order: &Option<Vec<String>>,
     container_name: Option<&str>,
+    remote_user: Option<&str>,
     container_user: Option<&str>,
 ) -> Result<()> {
     let Some(feat_map) = features else {
@@ -90,7 +91,7 @@ pub fn handle_features_with_container(
                 continue;
             }
             if let Some(opts) = feat_map.get(id) {
-                install_feature(id, opts, container_name, container_user)?;
+                install_feature(id, opts, container_name, remote_user, container_user)?;
             }
         }
         let mut remaining: Vec<&String> =
@@ -98,7 +99,7 @@ pub fn handle_features_with_container(
         remaining.sort();
         for id in remaining {
             if let Some(opts) = feat_map.get(id) {
-                install_feature(id, opts, container_name, container_user)?;
+                install_feature(id, opts, container_name, remote_user, container_user)?;
             }
         }
     } else {
@@ -131,7 +132,7 @@ pub fn handle_features_with_container(
         println!("Installing features in installsAfter order:");
         for id in sorted {
             if let Some(opts) = feat_map.get(&id) {
-                install_feature(&id, opts, container_name, container_user)?;
+                install_feature(&id, opts, container_name, remote_user, container_user)?;
             }
         }
     }
@@ -273,8 +274,11 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
         let dest_str = dest_dir.to_str().ok_or_else(|| {
             BondarError::Config("Feature cache path is not valid UTF-8".to_string())
         })?;
+        // Feature images are often file-only OCI artifacts with no CMD; pass a
+        // harmless command so `docker create` accepts them (the container is
+        // never started, only used for `docker cp`).
         let created = std::process::Command::new("docker")
-            .args(["create", "--name", &tmp_name, "--", feature_image])
+            .args(["create", "--name", &tmp_name, "--", feature_image, "sh"])
             .status()
             .map(|s| s.success())
             .unwrap_or(false);
@@ -407,6 +411,8 @@ fn copy_feature_into_container(
     let (ok, stderr) = run_output(
         std::process::Command::new("docker").args([
             "exec",
+            "--user",
+            "root",
             container,
             "sh",
             "-c",
@@ -421,10 +427,12 @@ fn copy_feature_into_container(
     let host_str = host_dir
         .to_str()
         .ok_or_else(|| BondarError::Config("Feature cache path is not valid UTF-8".to_string()))?;
+    // The `/.` suffix copies the directory *contents* into container_path
+    // (without it, docker cp would create container_path/<basename>).
     let (ok, stderr) = run_output(
         std::process::Command::new("docker").args([
             "cp",
-            host_str,
+            &format!("{host_str}/."),
             &format!("{container}:{container_path}/"),
         ]),
         "docker cp",
@@ -440,6 +448,7 @@ fn install_in_container(
     opts: &serde_json::Value,
     container: &str,
     container_path: &str,
+    remote_user: Option<&str>,
     container_user: Option<&str>,
 ) -> Result<()> {
     let script_path = format!("{container_path}/install.sh");
@@ -463,16 +472,24 @@ fn install_in_container(
     );
     let mut exec_cmd = std::process::Command::new("docker");
     exec_cmd.arg("exec");
-    // Feature install scripts must run as root by spec; user info is passed via env
-    if let Some(user) = container_user {
+    // install.sh always runs as root; the target users are passed via env
+    exec_cmd.arg("--user").arg("root");
+    // Per spec: _CONTAINER_USER is the container's user, _REMOTE_USER is the
+    // configured remoteUser; when only one is set it is used for both.
+    let effective_container_user = container_user.or(remote_user);
+    let effective_remote_user = remote_user.or(container_user);
+    if let Some(user) = effective_container_user {
         let home = resolve_user_home(container, user);
         exec_cmd.arg("-e").arg(format!("_CONTAINER_USER={user}"));
-        exec_cmd.arg("-e").arg(format!("_REMOTE_USER={user}"));
-        exec_cmd.arg("-e").arg(format!("_USERNAME={user}"));
         exec_cmd
             .arg("-e")
             .arg(format!("_CONTAINER_USER_HOME={home}"));
+    }
+    if let Some(user) = effective_remote_user {
+        let home = resolve_user_home(container, user);
+        exec_cmd.arg("-e").arg(format!("_REMOTE_USER={user}"));
         exec_cmd.arg("-e").arg(format!("_REMOTE_USER_HOME={home}"));
+        exec_cmd.arg("-e").arg(format!("_USERNAME={user}"));
     }
     // Pass feature options as environment variables. NOTE: all `-e` flags must
     // come before the container name; `docker exec [OPTIONS] CONTAINER ...`
@@ -493,7 +510,9 @@ fn install_in_container(
                 serde_json::Value::Number(n) => n.to_string(),
                 _ => v.to_string(),
             };
-            exec_cmd.arg("-e").arg(format!("{k}={value}"));
+            exec_cmd
+                .arg("-e")
+                .arg(format!("{}={value}", option_env_name(k)));
         }
     }
     exec_cmd.arg(container);
@@ -510,6 +529,8 @@ fn install_in_container(
         let _ = run_output(
             std::process::Command::new("docker").args([
                 "exec",
+                "--user",
+                "root",
                 container,
                 "sh",
                 "-c",
@@ -526,6 +547,8 @@ fn install_in_container(
     let _ = run_output(
         std::process::Command::new("docker").args([
             "exec",
+            "--user",
+            "root",
             container,
             "sh",
             "-c",
@@ -535,6 +558,29 @@ fn install_in_container(
     );
 
     Ok(())
+}
+
+/// Convert a feature option name to its environment variable form, per the
+/// devcontainer spec: non-word characters become `_`, a leading run of digits
+/// and underscores collapses to a single `_`, then the result is uppercased.
+fn option_env_name(name: &str) -> String {
+    let mapped: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = mapped.trim_start_matches(|c: char| c.is_ascii_digit() || c == '_');
+    let prefixed = if trimmed.len() == mapped.len() {
+        mapped
+    } else {
+        format!("_{trimmed}")
+    };
+    prefixed.to_ascii_uppercase()
 }
 
 fn read_feature_metadata(dir: &Path) -> Option<serde_json::Value> {
@@ -577,32 +623,24 @@ fn install_feature(
     id: &str,
     opts: &serde_json::Value,
     container_name: Option<&str>,
+    remote_user: Option<&str>,
     container_user: Option<&str>,
 ) -> Result<()> {
     if !id.contains('/') && !id.contains('.') {
         eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
         return Ok(());
     }
-    // String value is shorthand for version: "features": {"id": "18"} -> "id:18"
+    // Per spec, a string option value is shorthand for the `version` option:
+    // "features": {"id": "18"} == {"id": {"version": "18"}}
     let (effective_id, effective_opts) = if let Some(v) = opts.as_str() {
-        if id.contains(':') {
-            eprintln!(
-                "Warning: feature '{id}' already contains a version, ignoring string option '{v}'"
-            );
-            (id.to_string(), opts)
-        } else {
-            (
-                format!("{id}:{v}"),
-                &serde_json::Value::Null as &serde_json::Value,
-            )
-        }
+        (id.to_string(), serde_json::json!({ "version": v }))
     } else {
         if !opts.is_object() && !opts.is_null() {
             eprintln!(
                 "Warning: feature '{id}' options must be an object, got {opts}; ignoring options"
             );
         }
-        (id.to_string(), opts)
+        (id.to_string(), opts.clone())
     };
 
     println!("Attempting to install feature '{effective_id}' with opts {effective_opts}...");
@@ -654,9 +692,10 @@ fn install_feature(
         }
         install_in_container(
             &effective_id,
-            effective_opts,
+            &effective_opts,
             container,
             &container_path,
+            remote_user,
             container_user,
         )?;
     } else {
@@ -676,9 +715,21 @@ mod tests {
 
     #[test]
     fn test_handle_empty() {
-        assert!(handle_features_with_container(&None, &None, None, None).is_ok());
+        assert!(handle_features_with_container(&None, &None, None, None, None).is_ok());
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
-        assert!(handle_features_with_container(&Some(empty), &None, None, None).is_ok());
+        assert!(handle_features_with_container(&Some(empty), &None, None, None, None).is_ok());
+    }
+
+    #[test]
+    fn test_option_env_name() {
+        assert_eq!(option_env_name("installZsh"), "INSTALLZSH");
+        assert_eq!(option_env_name("version"), "VERSION");
+        assert_eq!(option_env_name("foo-bar"), "FOO_BAR");
+        assert_eq!(option_env_name("foo.bar"), "FOO_BAR");
+        assert_eq!(option_env_name("1abc"), "_ABC");
+        assert_eq!(option_env_name("_x"), "_X");
+        assert_eq!(option_env_name("123"), "_");
+        assert_eq!(option_env_name(""), "");
     }
 
     #[test]
@@ -845,6 +896,11 @@ mod tests {
         let features = Some(HashMap::from([(id.to_string(), serde_json::json!({}))]));
         let merged = collect_feature_customizations(&features);
         assert_eq!(merged["vscode"]["settings"]["a"], 1);
+
+        // The string version shorthand resolves to the same cache directory
+        let features_str = Some(HashMap::from([(id.to_string(), serde_json::json!("1"))]));
+        let merged_str = collect_feature_customizations(&features_str);
+        assert_eq!(merged_str["vscode"]["settings"]["a"], 1);
 
         // No features -> empty object
         assert!(

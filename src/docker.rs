@@ -763,13 +763,17 @@ fn attributes_entry<'a>(
     None
 }
 
+/// The container-side port portion of a port spec (last `:` segment with an
+/// optional `/udp` or `/tcp` suffix stripped).
+fn container_port_of(port_spec: &str) -> &str {
+    let port = port_spec.rsplit(':').next().unwrap_or(port_spec);
+    port.strip_suffix("/udp")
+        .or_else(|| port.strip_suffix("/tcp"))
+        .unwrap_or(port)
+}
+
 pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
-    // Determine the container port portion of the spec (strip /udp suffix)
-    let container_port = port_spec
-        .rsplit(':')
-        .next()
-        .unwrap_or(port_spec)
-        .trim_end_matches("/udp");
+    let container_port = container_port_of(port_spec);
     // Explicit per-port attributes take precedence
     if let Some(attrs) = &config.ports_attributes
         && let Some(entry) = attributes_entry(attrs, container_port)
@@ -790,11 +794,7 @@ pub fn is_udp_port(config: &DevContainerConfig, port_spec: &str) -> bool {
 
 /// Whether `onAutoForward: "ignore"` disables publishing for the port.
 pub fn is_port_ignored(config: &DevContainerConfig, port_spec: &str) -> bool {
-    let container_port = port_spec
-        .rsplit(':')
-        .next()
-        .unwrap_or(port_spec)
-        .trim_end_matches("/udp");
+    let container_port = container_port_of(port_spec);
     if let Some(attrs) = &config.ports_attributes
         && let Some(entry) = attributes_entry(attrs, container_port)
         && let Some(obj) = entry.as_object()
@@ -812,10 +812,13 @@ pub fn is_port_ignored(config: &DevContainerConfig, port_spec: &str) -> bool {
 }
 
 pub fn publish_port_arg(spec: &str) -> Option<String> {
-    // Preserve an explicit /udp protocol suffix if present
-    let (base, protocol) = match spec.strip_suffix("/udp") {
-        Some(b) => (b, "/udp"),
-        None => (spec, ""),
+    // Preserve an explicit /udp or /tcp protocol suffix if present
+    let (base, protocol) = if let Some(b) = spec.strip_suffix("/udp") {
+        (b, "/udp")
+    } else if let Some(b) = spec.strip_suffix("/tcp") {
+        (b, "/tcp")
+    } else {
+        (spec, "")
     };
     if base.starts_with('[') {
         return publish_ipv6_arg(base).map(|p| format!("{p}{protocol}"));
@@ -1172,14 +1175,14 @@ pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
                     );
                 }
             }
-            serde_json::Value::String(path) => match std::fs::read_to_string(path) {
-                Ok(content) => {
-                    resolved.push((key.clone(), content.trim().to_string()));
-                }
-                Err(e) => {
-                    eprintln!("Warning: secret '{key}' file '{path}' could not be read: {e}");
-                }
-            },
+            serde_json::Value::String(path) => {
+                // The devcontainer spec only defines the { "localEnv": "VAR" }
+                // form; a bare string is not a secret value and reading the
+                // referenced file would silently inject arbitrary host files.
+                eprintln!(
+                    "Warning: secret '{key}' uses the unsupported file-path form ('{path}'); skipping (use {{\"localEnv\": \"VAR\"}} instead)"
+                );
+            }
             other => {
                 eprintln!("Warning: secret '{key}' has unsupported format: {other}");
             }
@@ -1729,6 +1732,10 @@ mod tests {
         unsafe {
             std::env::set_var("BONDAR_TEST_SECRET_VAR", "secret-value");
         }
+        // A file that exists must still be skipped: the file-path form is not
+        // part of the spec and must never be injected as a secret value.
+        let secret_file = std::env::temp_dir().join("bondar-test-secret-file");
+        std::fs::write(&secret_file, "file-secret-value").unwrap();
         let cfg = DevContainerConfig {
             secrets: Some(HashMap::from([
                 (
@@ -1737,7 +1744,7 @@ mod tests {
                 ),
                 (
                     "FILE_SECRET".to_string(),
-                    serde_json::json!("/run/secrets/x"),
+                    serde_json::json!(secret_file.to_string_lossy()),
                 ),
             ])),
             ..Default::default()
@@ -1748,6 +1755,7 @@ mod tests {
             resolved,
             vec![("MY_SECRET".to_string(), "secret-value".to_string())]
         );
+        let _ = std::fs::remove_file(&secret_file);
         unsafe {
             std::env::remove_var("BONDAR_TEST_SECRET_VAR");
         }
@@ -1883,6 +1891,35 @@ mod tests {
             publish_port_arg("127.0.0.1:9090/udp"),
             Some("127.0.0.1:9090:9090/udp".to_string())
         );
+    }
+
+    #[test]
+    fn test_publish_port_arg_tcp_suffix() {
+        assert_eq!(
+            publish_port_arg("8080/tcp"),
+            Some("0.0.0.0:8080:8080/tcp".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("8080:80/tcp"),
+            Some("0.0.0.0:8080:80/tcp".to_string())
+        );
+        assert_eq!(
+            publish_port_arg("127.0.0.1:9090/tcp"),
+            Some("127.0.0.1:9090:9090/tcp".to_string())
+        );
+    }
+
+    #[test]
+    fn test_is_port_ignored_tcp_suffix() {
+        let cfg = DevContainerConfig {
+            ports_attributes: Some(serde_json::json!({
+                "3000": {"onAutoForward": "ignore"}
+            })),
+            ..Default::default()
+        };
+        // The /tcp suffix must still match the plain port key in attributes
+        assert!(is_port_ignored(&cfg, "3000/tcp"));
+        assert!(is_port_ignored(&cfg, "127.0.0.1:3000/tcp"));
     }
 
     #[test]

@@ -271,6 +271,32 @@ fn test_read_configuration() {
     );
     assert!(String::from_utf8_lossy(&valid.stdout).contains("valid"));
 
+    // A minimal image config without workspaceFolder must also be valid
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"image": "ubuntu:22.04"}"#,
+    )
+    .unwrap();
+    let minimal = bondar(&["read-configuration", "--workspace-folder", ws_str]);
+    assert!(
+        minimal.status.success(),
+        "minimal config rejected: {}",
+        String::from_utf8_lossy(&minimal.stderr)
+    );
+
+    // portsAttributes protocol "udp" is supported by bondar
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"image": "ubuntu:22.04", "portsAttributes": {"9090": {"protocol": "udp"}}}"#,
+    )
+    .unwrap();
+    let udp = bondar(&["read-configuration", "--workspace-folder", ws_str]);
+    assert!(
+        udp.status.success(),
+        "udp protocol rejected: {}",
+        String::from_utf8_lossy(&udp.stderr)
+    );
+
     // Invalid config (waitFor out of enum) -> exit 1
     std::fs::write(
         ws.join(".devcontainer/devcontainer.json"),
@@ -680,6 +706,91 @@ fn test_read_configuration_merged() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("Merged configuration"));
     assert!(String::from_utf8_lossy(&out.stdout).contains("FOO"));
 
+    cleanup(&ws);
+}
+
+#[test]
+fn test_compose_restart_skips_create_lifecycle() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-compose-restart");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n    volumes:\n      - .:/workspace\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-compose-restart", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "onCreateCommand": "sh -c 'echo run >> /tmp/oc-count.txt'", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up1 = bondar(&[
+        "up",
+        "--workspace-folder",
+        ws_str,
+        "--remove-existing-container",
+    ]);
+    assert!(
+        up1.status.success(),
+        "first up failed: {}",
+        String::from_utf8_lossy(&up1.stderr)
+    );
+    assert!(String::from_utf8_lossy(&up1.stdout).contains("Running onCreateCommand"));
+
+    // Stop the service container externally, then `up` must restart it without
+    // re-running the create-time lifecycle.
+    let project = project_name_for(&ws);
+    let ps = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "-q",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+        ])
+        .output()
+        .unwrap();
+    let id = String::from_utf8_lossy(&ps.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    assert!(!id.is_empty(), "service container not found");
+    assert!(
+        Command::new("docker")
+            .args(["stop", &id])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let up2 = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up2.status.success(),
+        "second up failed: {}",
+        String::from_utf8_lossy(&up2.stderr)
+    );
+    let stdout2 = String::from_utf8_lossy(&up2.stdout);
+    assert!(
+        !stdout2.contains("Running onCreateCommand"),
+        "onCreateCommand re-ran on restart: {stdout2}"
+    );
+
+    // The lifecycle file must contain exactly one line
+    let count = Command::new("docker")
+        .args(["exec", &id, "cat", "/tmp/oc-count.txt"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&count.stdout).lines().count(), 1);
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
     cleanup(&ws);
 }
 
