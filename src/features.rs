@@ -525,12 +525,21 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
         {
             for dep in arr {
                 if let Some(dep_str) = dep.as_str() {
-                    if !feat_map.contains_key(dep_str) {
+                    // Metadata ids omit the version tag; match canonically
+                    let dep_canonical = canonical_feature_id(dep_str);
+                    let mut matches: Vec<&String> = feat_map
+                        .keys()
+                        .filter(|key| canonical_feature_id(key) == dep_canonical)
+                        .collect();
+                    if matches.is_empty() {
                         eprintln!(
                             "Warning: feature '{id}' installsAfter references unknown feature '{dep_str}'"
                         );
                     } else {
-                        visit(dep_str, feat_map, sorted, visiting, visited);
+                        matches.sort();
+                        for matched in matches {
+                            visit(matched, feat_map, sorted, visiting, visited);
+                        }
                     }
                 }
             }
@@ -1613,6 +1622,19 @@ mod tests {
         let base_pos = sorted.iter().position(|x| x == "ghcr.io/a/base").unwrap();
         let child_pos = sorted.iter().position(|x| x == "ghcr.io/a/child").unwrap();
         assert!(base_pos < child_pos);
+    }
+
+    #[test]
+    fn test_sort_by_installs_after_versionless_ids() {
+        let mut feat_map: HashMap<String, serde_json::Value> = HashMap::new();
+        feat_map.insert(
+            "ghcr.io/a/a:1".to_string(),
+            serde_json::json!({ "installsAfter": ["ghcr.io/a/b"] }),
+        );
+        feat_map.insert("ghcr.io/a/b:2".to_string(), serde_json::json!({}));
+        let sorted = sort_by_installs_after(&feat_map);
+        // The dependency is referenced without a version tag
+        assert_eq!(sorted, vec!["ghcr.io/a/b:2", "ghcr.io/a/a:1"]);
     }
 
     #[test]
