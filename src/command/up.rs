@@ -121,16 +121,9 @@ pub fn run(
         println!("Skipping image build (--no-build)");
     }
 
-    // Inherit remoteUser/containerUser from the image metadata when the
-    // configuration does not set them
-    if cfg.remote_user.is_none() || cfg.container_user.is_none() {
-        let (remote_user, container_user) = docker::image_user_defaults(&image_name);
-        if cfg.remote_user.is_none() {
-            cfg.remote_user = remote_user;
-        }
-        if cfg.container_user.is_none() {
-            cfg.container_user = container_user;
-        }
+    // Merge the image's devcontainer.metadata (users, env, mounts, ...)
+    if let Some(raw) = docker::image_metadata_label(&image_name, true) {
+        crate::features::apply_image_metadata(&mut cfg, &raw);
     }
 
     docker::create_and_start_container(
@@ -559,21 +552,9 @@ fn run_compose(
         }
     };
 
-    // Inherit remoteUser/containerUser from the service image metadata when the
-    // configuration does not set them
-    {
-        let (remote_user, container_user) =
-            if merged_cfg.remote_user.is_none() || merged_cfg.container_user.is_none() {
-                crate::docker::container_image_user_defaults(&container_name)
-            } else {
-                (None, None)
-            };
-        if merged_cfg.remote_user.is_none() {
-            merged_cfg.remote_user = remote_user;
-        }
-        if merged_cfg.container_user.is_none() {
-            merged_cfg.container_user = container_user;
-        }
+    // Merge the service image's devcontainer.metadata (users, env, mounts, ...)
+    if let Some(raw) = crate::docker::container_metadata_label(&container_name) {
+        crate::features::apply_image_metadata(&mut merged_cfg, &raw);
     }
     let cfg = &merged_cfg;
 

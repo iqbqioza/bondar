@@ -1087,7 +1087,7 @@ fn test_image_metadata_remote_user() {
     );
     std::fs::write(
         ws.join("Dockerfile"),
-        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"remoteUser\":\"vscode\"}]'\n",
+        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"remoteUser\":\"vscode\",\"containerEnv\":{\"META_ENV\":\"1\"},\"privileged\":true}]'\n",
     )
     .unwrap();
     let build = Command::new("docker")
@@ -1120,6 +1120,36 @@ fn test_image_metadata_remote_user() {
         String::from_utf8_lossy(&exec.stdout).contains("vscode"),
         "remoteUser from image metadata not applied: {}",
         String::from_utf8_lossy(&exec.stdout)
+    );
+
+    // containerEnv and privileged from the metadata label are applied as well
+    let env = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--",
+        "sh",
+        "-c",
+        "echo META_ENV=$META_ENV",
+    ]);
+    assert!(
+        env.status.success() && String::from_utf8_lossy(&env.stdout).contains("META_ENV=1"),
+        "containerEnv from image metadata not applied: {}",
+        String::from_utf8_lossy(&env.stdout)
+    );
+    let privileged = Command::new("docker")
+        .args([
+            "inspect",
+            "-f",
+            "{{.HostConfig.Privileged}}",
+            "bondar-int-image-meta",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&privileged.stdout).trim(),
+        "true",
+        "privileged from image metadata not applied"
     );
 
     let down = bondar(&["down", "--workspace-folder", ws_str]);

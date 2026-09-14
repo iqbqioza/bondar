@@ -29,9 +29,7 @@ pub fn run(
     let (mut cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
     if cfg.docker_compose_file.is_some() {
-        if cfg.remote_user.is_none() || cfg.container_user.is_none() {
-            apply_container_image_users(&mut cfg, &cfg_path, &ws);
-        }
+        apply_compose_image_metadata(&mut cfg, &cfg_path, &ws);
         let exec_user = user
             .filter(|u| !u.is_empty())
             .or_else(|| cfg.remote_user.clone())
@@ -54,15 +52,8 @@ pub fn run(
     let container_name = cfg.container_name(&ws);
     if docker::container_exists(&container_name)? {
         docker::ensure_container_matches_workspace(&container_name, &ws)?;
-        if cfg.remote_user.is_none() || cfg.container_user.is_none() {
-            let (remote_user, container_user) =
-                docker::container_image_user_defaults(&container_name);
-            if cfg.remote_user.is_none() {
-                cfg.remote_user = remote_user;
-            }
-            if cfg.container_user.is_none() {
-                cfg.container_user = container_user;
-            }
+        if let Some(raw) = docker::container_metadata_label(&container_name) {
+            crate::features::apply_image_metadata(&mut cfg, &raw);
         }
     }
     let exec_user = user
@@ -129,8 +120,8 @@ pub fn merged_exec_env(
     }
 }
 
-/// Inherit `remoteUser`/`containerUser` from the compose service image metadata.
-pub(crate) fn apply_container_image_users(
+/// Merge the compose service image's `devcontainer.metadata` into the config.
+pub(crate) fn apply_compose_image_metadata(
     cfg: &mut config::DevContainerConfig,
     cfg_path: &std::path::Path,
     ws: &std::path::Path,
@@ -138,12 +129,8 @@ pub(crate) fn apply_container_image_users(
     let Ok(name) = crate::compose::get_service_container_name(cfg, cfg_path, ws) else {
         return;
     };
-    let (remote_user, container_user) = docker::container_image_user_defaults(&name);
-    if cfg.remote_user.is_none() {
-        cfg.remote_user = remote_user;
-    }
-    if cfg.container_user.is_none() {
-        cfg.container_user = container_user;
+    if let Some(raw) = docker::container_metadata_label(&name) {
+        crate::features::apply_image_metadata(cfg, &raw);
     }
 }
 

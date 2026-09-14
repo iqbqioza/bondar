@@ -75,10 +75,19 @@ pub struct FeatureContainerProperties {
 
 /// Parse the container properties from a fetched feature's metadata.
 fn collect_feature_container_properties(id: &str, dir: &Path) -> FeatureContainerProperties {
-    let mut props = FeatureContainerProperties::default();
     let Some(meta) = read_feature_metadata(dir) else {
-        return props;
+        return FeatureContainerProperties::default();
     };
+    container_properties_from_value(&meta, &format!("feature '{id}'"))
+}
+
+/// Container properties described by a devcontainer metadata object (feature
+/// metadata or an image `devcontainer.metadata` entry).
+fn container_properties_from_value(
+    meta: &serde_json::Value,
+    context: &str,
+) -> FeatureContainerProperties {
+    let mut props = FeatureContainerProperties::default();
     if let Some(env) = meta.get("containerEnv").and_then(|v| v.as_object()) {
         for (k, v) in env {
             let value = match v {
@@ -95,9 +104,7 @@ fn collect_feature_container_properties(id: &str, dir: &Path) -> FeatureContaine
             match serde_json::from_value::<crate::config::MountValue>(mount.clone()) {
                 Ok(m) => props.mounts.push(m),
                 Err(e) => {
-                    eprintln!(
-                        "  Warning: feature '{id}' mount {mount} is invalid and was ignored: {e}"
-                    );
+                    eprintln!("  Warning: {context} mount {mount} is invalid and was ignored: {e}");
                 }
             }
         }
@@ -121,6 +128,55 @@ fn collect_feature_container_properties(id: &str, dir: &Path) -> FeatureContaine
         }
     }
     props
+}
+
+/// Parse the `devcontainer.metadata` image label: a JSON array of partial
+/// configurations (or a single object).
+fn metadata_entries(raw: &str) -> Vec<serde_json::Value> {
+    match serde_json::from_str::<serde_json::Value>(raw.trim()) {
+        Ok(serde_json::Value::Array(items)) => items,
+        Ok(other) => vec![other],
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Merge the `devcontainer.metadata` image label into the configuration:
+/// `remoteUser`/`containerUser`/`userEnvProbe`/`overrideCommand` (when unset)
+/// and container properties (`containerEnv`, `mounts`, `privileged`, `init`,
+/// `capAdd`, `securityOpt`) accumulate with user values taking precedence.
+pub fn apply_image_metadata(config: &mut crate::config::DevContainerConfig, raw: &str) {
+    let entries = metadata_entries(raw);
+    let mut props = FeatureContainerProperties::default();
+    for entry in &entries {
+        if config.remote_user.is_none()
+            && let Some(user) = entry.get("remoteUser").and_then(|v| v.as_str())
+            && !user.is_empty()
+        {
+            config.remote_user = Some(user.to_string());
+        }
+        if config.container_user.is_none()
+            && let Some(user) = entry.get("containerUser").and_then(|v| v.as_str())
+            && !user.is_empty()
+        {
+            config.container_user = Some(user.to_string());
+        }
+        if config.user_env_probe.is_none()
+            && let Some(probe) = entry.get("userEnvProbe").and_then(|v| v.as_str())
+            && !probe.is_empty()
+        {
+            config.user_env_probe = Some(probe.to_string());
+        }
+        if config.override_command.is_none()
+            && let Some(value) = entry.get("overrideCommand").and_then(|v| v.as_bool())
+        {
+            config.override_command = Some(value);
+        }
+        merge_feature_container_properties(
+            &mut props,
+            container_properties_from_value(entry, "image metadata"),
+        );
+    }
+    apply_feature_container_properties(config, &props);
 }
 
 /// Merge one feature's properties into the accumulator. Dependencies are
@@ -1702,6 +1758,40 @@ mod tests {
     fn test_sort_by_installs_after_empty() {
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
         assert!(sort_by_installs_after(&empty).is_empty());
+    }
+
+    #[test]
+    fn test_apply_image_metadata() {
+        let mut cfg = crate::config::DevContainerConfig {
+            container_env: HashMap::from([("SHARED".to_string(), "user".to_string())]),
+            ..Default::default()
+        };
+        apply_image_metadata(
+            &mut cfg,
+            r#"[{"remoteUser":"vscode"},{"containerEnv":{"FROM_IMAGE":"1","SHARED":"lost"},"mounts":[{"type":"volume","source":"v","target":"/v"}],"privileged":true,"capAdd":["SYS_PTRACE"],"userEnvProbe":"loginShell"}]"#,
+        );
+        assert_eq!(cfg.remote_user.as_deref(), Some("vscode"));
+        assert_eq!(cfg.container_env.get("SHARED").unwrap(), "user");
+        assert_eq!(cfg.container_env.get("FROM_IMAGE").unwrap(), "1");
+        assert_eq!(cfg.mounts.len(), 1);
+        assert_eq!(cfg.privileged, Some(true));
+        assert_eq!(cfg.cap_add, vec!["SYS_PTRACE".to_string()]);
+        assert_eq!(cfg.user_env_probe.as_deref(), Some("loginShell"));
+        // User values are not overridden by metadata
+        let mut cfg2 = crate::config::DevContainerConfig {
+            remote_user: Some("me".to_string()),
+            privileged: Some(false),
+            user_env_probe: Some("none".to_string()),
+            ..Default::default()
+        };
+        apply_image_metadata(
+            &mut cfg2,
+            r#"{"remoteUser":"vscode","privileged":true,"userEnvProbe":"loginShell"}"#,
+        );
+        assert_eq!(cfg2.remote_user.as_deref(), Some("me"));
+        // Metadata can only enable privileged
+        assert_eq!(cfg2.privileged, Some(true));
+        assert_eq!(cfg2.user_env_probe.as_deref(), Some("none"));
     }
 
     #[test]
