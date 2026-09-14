@@ -264,7 +264,8 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand`. bondar
 - Options are passed as environment variables to `install.sh` (`installsAfter` is excluded).
 - `installsAfter` declared in the `devcontainer.json` feature entry orders features; unknown dependencies are warned. A feature's own `installsAfter` metadata (when available in the feature cache) is also used for ordering; `overrideFeatureInstallOrder` takes precedence over both.
 - Features are installed only when the container is created, not on restart.
-- `customizations` declared by features are merged and stored as a container label.
+- Lifecycle commands declared in feature metadata (`onCreateCommand` ... `postAttachCommand`) run before the user's corresponding lifecycle commands.
+- `customizations` declared by features are merged (objects merged, arrays unioned) and stored as a container label.
 
 ### Compose
 

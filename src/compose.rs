@@ -322,7 +322,8 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
             .as_nanos()
             .hash(&mut hasher);
         workspace_folder.hash(&mut hasher);
-        let rand = format!("{:x}", hasher.finish());
+        // Zero-padded so the slice below is always in bounds
+        let rand = format!("{:016x}", hasher.finish());
         std::env::temp_dir().join(format!(
             "{}-override-{}-{}.yml",
             project,
