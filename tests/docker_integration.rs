@@ -843,3 +843,133 @@ fn test_start_existing_container() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_compose_one_off_container_is_ignored() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-compose-oneoff");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n    volumes:\n      - .:/workspace\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-compose-oneoff", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "onCreateCommand": "sh -c 'echo run >> /tmp/oc-oneoff.txt'", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up1 = bondar(&[
+        "up",
+        "--workspace-folder",
+        ws_str,
+        "--remove-existing-container",
+    ]);
+    assert!(
+        up1.status.success(),
+        "first up failed: {}",
+        String::from_utf8_lossy(&up1.stderr)
+    );
+    assert!(String::from_utf8_lossy(&up1.stdout).contains("Running onCreateCommand"));
+
+    let project = project_name_for(&ws);
+    let compose_file = ws.join("docker-compose.yml");
+    let compose_file = compose_file.to_str().unwrap();
+
+    // Create a one-off container for the same service
+    let run = Command::new("docker")
+        .args([
+            "compose",
+            "--project-name",
+            &project,
+            "-f",
+            compose_file,
+            "run",
+            "-d",
+            "app",
+            "sh",
+            "-c",
+            "sleep 600",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "one-off run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // Remove the actual service container, leaving only the one-off
+    let ps = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+            "--filter",
+            "label=com.docker.compose.service=app",
+            "--format",
+            "{{.ID}}\t{{.Label \"com.docker.compose.oneoff\"}}",
+        ])
+        .output()
+        .unwrap();
+    let service_id = String::from_utf8_lossy(&ps.stdout)
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split('\t');
+            let id = parts.next().unwrap_or("").trim();
+            let oneoff = parts.next().unwrap_or("").trim();
+            if !id.is_empty() && oneoff != "True" {
+                Some(id.to_string())
+            } else {
+                None
+            }
+        })
+        .expect("service container not found");
+    assert!(
+        Command::new("docker")
+            .args(["rm", "-f", &service_id])
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    // The one-off must not be mistaken for the service container: `up` has to
+    // treat the service as missing and run the create lifecycle again.
+    let up2 = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up2.status.success(),
+        "second up failed: {}",
+        String::from_utf8_lossy(&up2.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&up2.stdout).contains("Running onCreateCommand"),
+        "service container was not recreated: {}",
+        String::from_utf8_lossy(&up2.stdout)
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+
+    // Remove any leftover project container (e.g. the one-off)
+    let leftovers = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "-q",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+        ])
+        .output()
+        .unwrap();
+    for id in String::from_utf8_lossy(&leftovers.stdout).lines() {
+        let _ = Command::new("docker").args(["rm", "-f", id]).output();
+    }
+    cleanup(&ws);
+}
