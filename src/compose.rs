@@ -113,6 +113,23 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
     Some(vol)
 }
 
+/// The named volume referenced by a compose short-syntax volume entry, if any.
+/// Paths (absolute, relative, `~`) and anonymous volumes return `None`.
+fn compose_named_volume(vol: &str) -> Option<&str> {
+    let (source, _) = vol.split_once(':')?;
+    if source.is_empty()
+        || source.starts_with('/')
+        || source.starts_with('.')
+        || source.starts_with('~')
+        || source.starts_with('\\')
+        || source.contains('/')
+        || source.contains('\\')
+    {
+        return None;
+    }
+    Some(source)
+}
+
 fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) -> Result<PathBuf> {
     let service = config
         .service
@@ -252,6 +269,15 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
     }
 
     let mut wrote_any = false;
+    // Compose requires named volumes to be declared at the top level
+    let mut named_volumes: Vec<String> = Vec::new();
+    for v in &volumes {
+        if let Some(name) = compose_named_volume(v)
+            && !named_volumes.iter().any(|n| n == name)
+        {
+            named_volumes.push(name.to_string());
+        }
+    }
     // Build env lines first so an empty `environment:` key is never emitted
     // (e.g. when secrets contain only file-path entries that cannot be resolved).
     let mut env_lines: Vec<(String, String)> = Vec::new();
@@ -301,6 +327,37 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         yaml.push_str("    volumes:\n");
         for v in &volumes {
             yaml.push_str(&format!("      - \"{}\"\n", escape_yaml_value(v)));
+        }
+    }
+    if config.privileged.unwrap_or(false) {
+        wrote_any = true;
+        yaml.push_str("    privileged: true\n");
+    }
+    if config.init.unwrap_or(false) {
+        wrote_any = true;
+        yaml.push_str("    init: true\n");
+    }
+    if !config.cap_add.is_empty() {
+        wrote_any = true;
+        yaml.push_str("    cap_add:\n");
+        for c in &config.cap_add {
+            yaml.push_str(&format!("      - \"{}\"\n", escape_yaml_value(c)));
+        }
+    }
+    if !config.security_opt.is_empty() {
+        wrote_any = true;
+        yaml.push_str("    security_opt:\n");
+        for s in &config.security_opt {
+            yaml.push_str(&format!("      - \"{}\"\n", escape_yaml_value(s)));
+        }
+    }
+
+    if !named_volumes.is_empty() {
+        wrote_any = true;
+        named_volumes.sort();
+        yaml.push_str("volumes:\n");
+        for name in &named_volumes {
+            yaml.push_str(&format!("  {}: {{}}\n", escape_yaml_key(name)));
         }
     }
 
@@ -926,6 +983,65 @@ mod tests {
         assert!(content.contains("  app:"));
         assert!(content.contains("FOO: \"bar\""));
         assert!(content.contains("- \"0.0.0.0:8080:8080\""));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_compose_override_security_properties() {
+        let dir = std::env::temp_dir().join("bondar-ovr-test-security");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            privileged: Some(true),
+            init: Some(true),
+            cap_add: vec!["SYS_PTRACE".to_string()],
+            security_opt: vec!["seccomp=unconfined".to_string()],
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("privileged: true"));
+        assert!(content.contains("init: true"));
+        assert!(content.contains("cap_add:"));
+        assert!(content.contains("- \"SYS_PTRACE\""));
+        assert!(content.contains("security_opt:"));
+        assert!(content.contains("- \"seccomp=unconfined\""));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_compose_named_volume() {
+        assert_eq!(compose_named_volume("featvol:/data"), Some("featvol"));
+        assert_eq!(compose_named_volume("featvol:/data:ro"), Some("featvol"));
+        assert_eq!(compose_named_volume("/host:/data"), None);
+        assert_eq!(compose_named_volume("./data:/data"), None);
+        assert_eq!(compose_named_volume("../data:/data"), None);
+        assert_eq!(compose_named_volume("/data"), None);
+        assert_eq!(compose_named_volume("~/data:/data"), None);
+    }
+
+    #[test]
+    fn test_write_compose_override_declares_named_volumes() {
+        let dir = std::env::temp_dir().join("bondar-ovr-test-named-vol");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            mounts: vec![MountValue::Object(MountObject {
+                source: Some("featvol".to_string()),
+                target: Some("/data".to_string()),
+                mount_type: Some("volume".to_string()),
+                readonly: None,
+            })],
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("- \"featvol:/data\""));
+        assert!(content.contains("volumes:\n  featvol: {}"));
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir_all(&dir);
     }

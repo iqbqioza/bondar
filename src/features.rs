@@ -63,6 +63,208 @@ fn merge_customization_values(
     }
 }
 
+/// Container properties a feature may declare in its metadata. They must be
+/// merged into the container configuration before the container is created.
+#[derive(Debug, Default, Clone)]
+pub struct FeatureContainerProperties {
+    pub container_env: HashMap<String, String>,
+    pub mounts: Vec<crate::config::MountValue>,
+    pub privileged: bool,
+    pub init: bool,
+    pub cap_add: Vec<String>,
+    pub security_opt: Vec<String>,
+}
+
+/// Parse the container properties from a fetched feature's metadata.
+fn collect_feature_container_properties(id: &str, dir: &Path) -> FeatureContainerProperties {
+    let mut props = FeatureContainerProperties::default();
+    let Some(meta) = read_feature_metadata(dir) else {
+        return props;
+    };
+    if let Some(env) = meta.get("containerEnv").and_then(|v| v.as_object()) {
+        for (k, v) in env {
+            let value = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Number(n) => n.to_string(),
+                _ => v.to_string(),
+            };
+            props.container_env.insert(k.clone(), value);
+        }
+    }
+    if let Some(mounts) = meta.get("mounts").and_then(|v| v.as_array()) {
+        for mount in mounts {
+            match serde_json::from_value::<crate::config::MountValue>(mount.clone()) {
+                Ok(m) => props.mounts.push(m),
+                Err(e) => {
+                    eprintln!(
+                        "  Warning: feature '{id}' mount {mount} is invalid and was ignored: {e}"
+                    );
+                }
+            }
+        }
+    }
+    if let Some(v) = meta.get("privileged").and_then(|v| v.as_bool()) {
+        props.privileged = v;
+    }
+    if let Some(v) = meta.get("init").and_then(|v| v.as_bool()) {
+        props.init = v;
+    }
+    for (key, target) in [
+        ("capAdd", &mut props.cap_add),
+        ("securityOpt", &mut props.security_opt),
+    ] {
+        if let Some(arr) = meta.get(key).and_then(|v| v.as_array()) {
+            for item in arr {
+                if let Some(s) = item.as_str() {
+                    target.push(s.to_string());
+                }
+            }
+        }
+    }
+    props
+}
+
+/// Merge one feature's properties into the accumulator. Dependencies are
+/// processed first, so a dependent feature overrides containerEnv values and
+/// appends to mounts/capabilities.
+fn merge_feature_container_properties(
+    acc: &mut FeatureContainerProperties,
+    next: FeatureContainerProperties,
+) {
+    for (k, v) in next.container_env {
+        acc.container_env.insert(k, v);
+    }
+    acc.mounts.extend(next.mounts);
+    acc.privileged = acc.privileged || next.privileged;
+    acc.init = acc.init || next.init;
+    for c in next.cap_add {
+        if !acc.cap_add.contains(&c) {
+            acc.cap_add.push(c);
+        }
+    }
+    for s in next.security_opt {
+        if !acc.security_opt.contains(&s) {
+            acc.security_opt.push(s);
+        }
+    }
+}
+
+/// Fetch all configured features (and their `dependsOn` dependencies) into the
+/// cache and collect the container properties they declare, so the container
+/// can be created with them.
+pub fn prefetch_feature_container_properties(
+    features: &Option<HashMap<String, serde_json::Value>>,
+) -> Result<FeatureContainerProperties> {
+    let Some(feat_map) = features else {
+        return Ok(FeatureContainerProperties::default());
+    };
+    if feat_map.is_empty() {
+        return Ok(FeatureContainerProperties::default());
+    }
+    let has_docker = std::process::Command::new("docker")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_docker {
+        eprintln!("Warning: docker not available, cannot read feature metadata");
+        return Ok(FeatureContainerProperties::default());
+    }
+    let mut props = FeatureContainerProperties::default();
+    let mut visited = std::collections::HashSet::new();
+    let mut visiting = std::collections::HashSet::new();
+    let mut ids: Vec<&String> = feat_map.keys().collect();
+    ids.sort();
+    for id in ids {
+        prefetch_one_feature(id, &mut props, &mut visited, &mut visiting)?;
+    }
+    Ok(props)
+}
+
+fn prefetch_one_feature(
+    id: &str,
+    props: &mut FeatureContainerProperties,
+    visited: &mut std::collections::HashSet<String>,
+    visiting: &mut std::collections::HashSet<String>,
+) -> Result<()> {
+    if visited.contains(id) {
+        return Ok(());
+    }
+    if !visiting.insert(id.to_string()) {
+        eprintln!("Warning: circular dependsOn detected for feature '{id}'; skipping dependency");
+        return Ok(());
+    }
+    let result = prefetch_one_feature_inner(id, props, visited, visiting);
+    visiting.remove(id);
+    result
+}
+
+fn prefetch_one_feature_inner(
+    id: &str,
+    props: &mut FeatureContainerProperties,
+    visited: &mut std::collections::HashSet<String>,
+    visiting: &mut std::collections::HashSet<String>,
+) -> Result<()> {
+    if !id.contains('/') && !id.contains('.') {
+        eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
+        return Ok(());
+    }
+    let Some(dest_dir) = fetch_feature_to_cache(id)? else {
+        return Ok(());
+    };
+    if let Some(meta) = read_feature_metadata(&dest_dir)
+        && let Some(deps) = meta.get("dependsOn").and_then(|v| v.as_object())
+    {
+        let mut dep_ids: Vec<&String> = deps.keys().collect();
+        dep_ids.sort();
+        for dep_id in dep_ids {
+            if dep_id.as_str() == id {
+                eprintln!("Warning: feature '{id}' dependsOn itself; skipping");
+                continue;
+            }
+            prefetch_one_feature(dep_id, props, visited, visiting)?;
+        }
+    }
+    let resolved_props = collect_feature_container_properties(id, &dest_dir);
+    merge_feature_container_properties(props, resolved_props);
+    visited.insert(id.to_string());
+    Ok(())
+}
+
+/// Merge feature-declared container properties into the configuration. User
+/// configuration wins for `containerEnv`; feature requirements can only enable
+/// `privileged`/`init` and append capabilities/security options.
+pub fn apply_feature_container_properties(
+    config: &mut crate::config::DevContainerConfig,
+    props: &FeatureContainerProperties,
+) {
+    for (k, v) in &props.container_env {
+        config
+            .container_env
+            .entry(k.clone())
+            .or_insert_with(|| v.clone());
+    }
+    for m in &props.mounts {
+        config.mounts.push(m.clone());
+    }
+    if props.privileged {
+        config.privileged = Some(true);
+    }
+    if props.init {
+        config.init = Some(true);
+    }
+    for c in &props.cap_add {
+        if !config.cap_add.contains(c) {
+            config.cap_add.push(c.clone());
+        }
+    }
+    for s in &props.security_opt {
+        if !config.security_opt.contains(s) {
+            config.security_opt.push(s.clone());
+        }
+    }
+}
 /// Lifecycle hooks that features may declare in their metadata, in spec order.
 pub const FEATURE_LIFECYCLE_HOOKS: [&str; 5] = [
     "onCreateCommand",
@@ -783,32 +985,15 @@ fn install_fetched_feature(
     remote_user: Option<&str>,
     container_user: Option<&str>,
 ) -> Result<()> {
-    if let Some(meta) = read_feature_metadata(dest_dir) {
-        if let Some(after) = meta.get("installsAfter").and_then(|v| v.as_array()) {
-            let deps: Vec<String> = after
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect();
-            if !deps.is_empty() {
-                println!("  Feature declares installsAfter: {deps:?}");
-            }
-        }
-        // Report feature-declared container properties that bondar does not
-        // apply automatically (they would require recreating the container
-        // with merged configuration)
-        for key in [
-            "containerEnv",
-            "mounts",
-            "privileged",
-            "init",
-            "capAdd",
-            "securityOpt",
-        ] {
-            if let Some(val) = meta.get(key) {
-                println!(
-                    "  Note: feature declares {key} = {val}; set {key} in devcontainer.json to apply it (bondar does not merge feature-level {key})"
-                );
-            }
+    if let Some(meta) = read_feature_metadata(dest_dir)
+        && let Some(after) = meta.get("installsAfter").and_then(|v| v.as_array())
+    {
+        let deps: Vec<String> = after
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        if !deps.is_empty() {
+            println!("  Feature declares installsAfter: {deps:?}");
         }
     }
 
@@ -1191,6 +1376,58 @@ mod tests {
     fn test_sort_by_installs_after_empty() {
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
         assert!(sort_by_installs_after(&empty).is_empty());
+    }
+
+    #[test]
+    fn test_collect_and_apply_feature_container_properties() {
+        let dir = std::env::temp_dir().join("bondar-feature-props-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("devcontainer-feature.json"),
+            r#"{
+                "containerEnv": {"FEATURE_VAR": "fv", "NUM": 1},
+                "mounts": ["type=volume,source=fvol,target=/fdata", {"type": "bind", "source": "/host", "target": "/in", "readonly": true}],
+                "privileged": true,
+                "init": true,
+                "capAdd": ["SYS_PTRACE"],
+                "securityOpt": ["seccomp=unconfined"]
+            }"#,
+        )
+        .unwrap();
+        let props = collect_feature_container_properties("ghcr.io/a/b", &dir);
+        assert_eq!(
+            props.container_env.get("FEATURE_VAR").map(String::as_str),
+            Some("fv")
+        );
+        assert_eq!(
+            props.container_env.get("NUM").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(props.mounts.len(), 2);
+        assert!(props.privileged);
+        assert!(props.init);
+        assert_eq!(props.cap_add, vec!["SYS_PTRACE".to_string()]);
+        assert_eq!(props.security_opt, vec!["seccomp=unconfined".to_string()]);
+
+        // Applying merges without overriding user values
+        let mut cfg = crate::config::DevContainerConfig {
+            container_env: HashMap::from([("FEATURE_VAR".to_string(), "user".to_string())]),
+            cap_add: vec!["NET_ADMIN".to_string()],
+            ..Default::default()
+        };
+        apply_feature_container_properties(&mut cfg, &props);
+        assert_eq!(cfg.container_env.get("FEATURE_VAR").unwrap(), "user");
+        assert_eq!(cfg.container_env.get("NUM").unwrap(), "1");
+        assert_eq!(cfg.mounts.len(), 2);
+        assert_eq!(cfg.privileged, Some(true));
+        assert_eq!(cfg.init, Some(true));
+        assert_eq!(
+            cfg.cap_add,
+            vec!["NET_ADMIN".to_string(), "SYS_PTRACE".to_string()]
+        );
+        assert_eq!(cfg.security_opt, vec!["seccomp=unconfined".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
