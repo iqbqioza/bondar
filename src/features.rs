@@ -7,13 +7,11 @@ use crate::error::{BondarError, Result};
 /// them into a single object. Returns an empty map when nothing is available.
 pub fn collect_feature_customizations(
     feat_map: &HashMap<String, serde_json::Value>,
+    order: &[String],
 ) -> serde_json::Value {
     let mut merged = serde_json::Map::new();
-    // Sorted ids keep the merge deterministic (HashMap iteration is not)
-    let mut ids: Vec<&String> = feat_map.keys().collect();
-    ids.sort();
-    for id in ids {
-        let dir = feature_cache_dir().join(sanitize_id(id));
+    for id in feature_ids_in_order(feat_map, order) {
+        let dir = feature_cache_dir().join(sanitize_id(&id));
         let Some(meta) = read_feature_metadata(&dir) else {
             continue;
         };
@@ -281,17 +279,45 @@ pub const FEATURE_LIFECYCLE_HOOKS: [&str; 5] = [
     "postAttachCommand",
 ];
 
+/// Feature ids in installation order: the given order first (which includes
+/// dependencies), then any requested features not present in it, sorted for
+/// determinism.
+fn feature_ids_in_order(
+    feat_map: &HashMap<String, serde_json::Value>,
+    order: &[String],
+) -> Vec<String> {
+    let mut ids: Vec<String> = order.to_vec();
+    let mut extra: Vec<String> = feat_map
+        .keys()
+        .filter(|id| !order.contains(id))
+        .cloned()
+        .collect();
+    extra.sort();
+    ids.extend(extra);
+    ids
+}
+
+/// Sorted feature ids for cases where no installation happened (e.g. a
+/// container restart), so cached metadata is still processed deterministically.
+pub fn feature_ids_sorted(features: &Option<HashMap<String, serde_json::Value>>) -> Vec<String> {
+    let mut ids: Vec<String> = features
+        .as_ref()
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default();
+    ids.sort();
+    ids
+}
+
 /// Collect lifecycle commands declared by features (from cached metadata), in
 /// deterministic feature order, so they can run before the user's lifecycle
 /// commands.
 pub fn collect_feature_lifecycle_hooks(
     feat_map: &HashMap<String, serde_json::Value>,
+    order: &[String],
 ) -> Vec<(&'static str, serde_json::Value)> {
-    let mut ids: Vec<&String> = feat_map.keys().collect();
-    ids.sort();
     let mut hooks = Vec::new();
-    for id in ids {
-        let dir = feature_cache_dir().join(sanitize_id(id));
+    for id in feature_ids_in_order(feat_map, order) {
+        let dir = feature_cache_dir().join(sanitize_id(&id));
         let Some(meta) = read_feature_metadata(&dir) else {
             continue;
         };
@@ -312,12 +338,12 @@ pub fn handle_features_with_container(
     container_name: Option<&str>,
     remote_user: Option<&str>,
     container_user: Option<&str>,
-) -> Result<HashMap<String, serde_json::Value>> {
+) -> Result<(HashMap<String, serde_json::Value>, Vec<String>)> {
     let Some(feat_map) = features else {
-        return Ok(HashMap::new());
+        return Ok((HashMap::new(), Vec::new()));
     };
     if feat_map.is_empty() {
-        return Ok(HashMap::new());
+        return Ok((HashMap::new(), Vec::new()));
     }
 
     let has_docker = std::process::Command::new("docker")
@@ -327,7 +353,7 @@ pub fn handle_features_with_container(
         .unwrap_or(false);
     if !has_docker {
         eprintln!("Warning: docker not available, cannot install features");
-        return Ok(HashMap::new());
+        return Ok((HashMap::new(), Vec::new()));
     }
 
     println!("Features requested: {} feature(s)", feat_map.len());
@@ -406,7 +432,7 @@ pub fn handle_features_with_container(
         }
     }
 
-    Ok(installer.installed)
+    Ok((installer.installed, installer.order))
 }
 
 fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<String> {
@@ -1046,6 +1072,7 @@ struct FeatureInstaller<'a> {
     remote_user: Option<&'a str>,
     container_user: Option<&'a str>,
     installed: HashMap<String, serde_json::Value>,
+    order: Vec<String>,
     visiting: std::collections::HashSet<String>,
 }
 
@@ -1060,6 +1087,7 @@ impl<'a> FeatureInstaller<'a> {
             remote_user,
             container_user,
             installed: HashMap::new(),
+            order: Vec::new(),
             visiting: std::collections::HashSet::new(),
         }
     }
@@ -1112,6 +1140,7 @@ impl<'a> FeatureInstaller<'a> {
             self.remote_user,
             self.container_user,
         )?;
+        self.order.push(id.to_string());
         self.installed.insert(id.to_string(), effective_opts);
         Ok(())
     }
@@ -1293,7 +1322,8 @@ mod tests {
             (id_a.to_string(), serde_json::json!({})),
             (id_b.to_string(), serde_json::json!({})),
         ]);
-        let merged = collect_feature_customizations(&features);
+        let order = feature_ids_sorted(&Some(features.clone()));
+        let merged = collect_feature_customizations(&features, &order);
         let extensions = merged["vscode"]["extensions"].as_array().unwrap();
         assert_eq!(extensions.len(), 2);
         assert!(extensions.contains(&serde_json::json!("a")));
@@ -1317,13 +1347,50 @@ mod tests {
         )
         .unwrap();
         let features = HashMap::from([(id.to_string(), serde_json::json!({}))]);
-        let hooks = collect_feature_lifecycle_hooks(&features);
+        let order = feature_ids_sorted(&Some(features.clone()));
+        let hooks = collect_feature_lifecycle_hooks(&features, &order);
         assert_eq!(hooks.len(), 2);
         assert_eq!(hooks[0].0, "postCreateCommand");
         assert_eq!(hooks[0].1, serde_json::json!("echo feature"));
         assert_eq!(hooks[1].0, "postStartCommand");
-        assert_eq!(collect_feature_lifecycle_hooks(&HashMap::new()).len(), 0);
+        assert_eq!(
+            collect_feature_lifecycle_hooks(&HashMap::new(), &[]).len(),
+            0
+        );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_feature_hooks_and_customizations_follow_install_order() {
+        let id_a = "ghcr.io/test/order-a";
+        let id_b = "ghcr.io/test/order-b";
+        for (id, key) in [(id_a, "a"), (id_b, "b")] {
+            let dir = feature_cache_dir().join(sanitize_id(id));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("devcontainer-feature.json"),
+                format!(
+                    r#"{{"postCreateCommand": "echo {key}", "customizations": {{"vscode": {{"x": "{key}"}}}}}}"#
+                ),
+            )
+            .unwrap();
+        }
+        let features = HashMap::from([
+            (id_a.to_string(), serde_json::json!({})),
+            (id_b.to_string(), serde_json::json!({})),
+        ]);
+        let order = vec![id_b.to_string(), id_a.to_string()];
+        let hooks = collect_feature_lifecycle_hooks(&features, &order);
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].1, serde_json::json!("echo b"));
+        assert_eq!(hooks[1].1, serde_json::json!("echo a"));
+        // Later features in install order override earlier values
+        let merged = collect_feature_customizations(&features, &order);
+        assert_eq!(merged["vscode"]["x"], "a");
+        for id in [id_a, id_b] {
+            let _ = std::fs::remove_dir_all(feature_cache_dir().join(sanitize_id(id)));
+        }
     }
 
     #[test]
@@ -1461,17 +1528,19 @@ mod tests {
         )
         .unwrap();
         let features = HashMap::from([(id.to_string(), serde_json::json!({}))]);
-        let merged = collect_feature_customizations(&features);
+        let order = feature_ids_sorted(&Some(features.clone()));
+        let merged = collect_feature_customizations(&features, &order);
         assert_eq!(merged["vscode"]["settings"]["a"], 1);
 
         // The string version shorthand resolves to the same cache directory
         let features_str = HashMap::from([(id.to_string(), serde_json::json!("1"))]);
-        let merged_str = collect_feature_customizations(&features_str);
+        let order_str = feature_ids_sorted(&Some(features_str.clone()));
+        let merged_str = collect_feature_customizations(&features_str, &order_str);
         assert_eq!(merged_str["vscode"]["settings"]["a"], 1);
 
         // No features -> empty object
         assert!(
-            collect_feature_customizations(&HashMap::new())
+            collect_feature_customizations(&HashMap::new(), &[])
                 .as_object()
                 .unwrap()
                 .is_empty()
