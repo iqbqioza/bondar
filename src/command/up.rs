@@ -121,6 +121,18 @@ pub fn run(
         println!("Skipping image build (--no-build)");
     }
 
+    // Inherit remoteUser/containerUser from the image metadata when the
+    // configuration does not set them
+    if cfg.remote_user.is_none() || cfg.container_user.is_none() {
+        let (remote_user, container_user) = docker::image_user_defaults(&image_name);
+        if cfg.remote_user.is_none() {
+            cfg.remote_user = remote_user;
+        }
+        if cfg.container_user.is_none() {
+            cfg.container_user = container_user;
+        }
+    }
+
     docker::create_and_start_container(
         &cfg,
         &ws,
@@ -531,15 +543,12 @@ fn run_compose(
 
     let newly_created = !was_existing || remove_existing;
 
-    let service = cfg.service.as_deref().unwrap_or("service");
+    let service = cfg.service.clone().unwrap_or_else(|| "service".to_string());
     // When the container name cannot be resolved, docker exec based steps
     // (UID sync, features, lifecycle) cannot run; skip them instead of
     // executing against a guessed name (e.g. bare service name).
     let container_name = match crate::compose::get_service_container_name(cfg, cfg_path, ws) {
-        Ok(name) => {
-            host::handle_update_remote_user_uid(cfg, &name, ws)?;
-            name
-        }
+        Ok(name) => name,
         Err(e) => {
             eprintln!(
                 "Warning: could not resolve service container name ({e}); skipping UID sync, feature installation and lifecycle hooks"
@@ -549,6 +558,26 @@ fn run_compose(
             return Ok(());
         }
     };
+
+    // Inherit remoteUser/containerUser from the service image metadata when the
+    // configuration does not set them
+    {
+        let (remote_user, container_user) =
+            if merged_cfg.remote_user.is_none() || merged_cfg.container_user.is_none() {
+                crate::docker::container_image_user_defaults(&container_name)
+            } else {
+                (None, None)
+            };
+        if merged_cfg.remote_user.is_none() {
+            merged_cfg.remote_user = remote_user;
+        }
+        if merged_cfg.container_user.is_none() {
+            merged_cfg.container_user = container_user;
+        }
+    }
+    let cfg = &merged_cfg;
+
+    host::handle_update_remote_user_uid(cfg, &container_name, ws)?;
 
     let (installed_features, installed_order) = if newly_created {
         crate::features::handle_features_with_container(

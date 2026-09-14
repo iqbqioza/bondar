@@ -8,9 +8,12 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     docker::check_docker_available()?;
 
     let ws = docker::get_workspace_folder(workspace_folder)?;
-    let (cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+    let (mut cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
 
     if cfg.docker_compose_file.is_some() {
+        if cfg.remote_user.is_none() || cfg.container_user.is_none() {
+            crate::command::exec::apply_container_image_users(&mut cfg, &cfg_path, &ws);
+        }
         let shell_cmd = vec![
             "sh".to_string(),
             "-c".to_string(),
@@ -42,6 +45,16 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
     let container_name = cfg.container_name(&ws);
     if docker::container_exists(&container_name)? {
         docker::ensure_container_matches_workspace(&container_name, &ws)?;
+        if cfg.remote_user.is_none() || cfg.container_user.is_none() {
+            let (remote_user, container_user) =
+                docker::container_image_user_defaults(&container_name);
+            if cfg.remote_user.is_none() {
+                cfg.remote_user = remote_user;
+            }
+            if cfg.container_user.is_none() {
+                cfg.container_user = container_user;
+            }
+        }
     }
     let user = cfg
         .remote_user
