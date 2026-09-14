@@ -265,6 +265,8 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand`. bondar
 - `installsAfter` declared in the `devcontainer.json` feature entry orders features; unknown dependencies are warned. A feature's own `installsAfter` metadata is also used for ordering; `overrideFeatureInstallOrder` takes precedence over both.
 - `dependsOn` declared in feature metadata installs the dependencies (with the options given there) before the feature, recursively. Circular dependencies are warned and skipped.
 - Container properties declared by features (`containerEnv`, `mounts`, `privileged`, `init`, `capAdd`, `securityOpt`) are merged into the container configuration before creation (for image/Dockerfile configs and through the compose override). User `containerEnv` values win over feature values.
+- Deprecated features (`"deprecated": true`) are warned about.
+- `entrypoint` declared by a feature is not applied; bondar does not modify the container entrypoint. Run the required setup from `postStartCommand` or from the compose file instead.
 - Features are installed only when the container is created, not on restart.
 - Lifecycle commands declared in feature metadata (`onCreateCommand` ... `postAttachCommand`) run before the user's corresponding lifecycle commands.
 - `customizations` declared by features are merged (objects merged, arrays unioned) and stored as a container label.

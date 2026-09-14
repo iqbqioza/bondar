@@ -213,17 +213,24 @@ fn prefetch_one_feature_inner(
     let Some(dest_dir) = fetch_feature_to_cache(id)? else {
         return Ok(());
     };
-    if let Some(meta) = read_feature_metadata(&dest_dir)
-        && let Some(deps) = meta.get("dependsOn").and_then(|v| v.as_object())
-    {
-        let mut dep_ids: Vec<&String> = deps.keys().collect();
-        dep_ids.sort();
-        for dep_id in dep_ids {
-            if dep_id.as_str() == id {
-                eprintln!("Warning: feature '{id}' dependsOn itself; skipping");
-                continue;
+    if let Some(meta) = read_feature_metadata(&dest_dir) {
+        if meta
+            .get("deprecated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            eprintln!("Warning: feature '{id}' is marked as deprecated by its author");
+        }
+        if let Some(deps) = meta.get("dependsOn").and_then(|v| v.as_object()) {
+            let mut dep_ids: Vec<&String> = deps.keys().collect();
+            dep_ids.sort();
+            for dep_id in dep_ids {
+                if dep_id.as_str() == id {
+                    eprintln!("Warning: feature '{id}' dependsOn itself; skipping");
+                    continue;
+                }
+                prefetch_one_feature(dep_id, props, visited, visiting)?;
             }
-            prefetch_one_feature(dep_id, props, visited, visiting)?;
         }
     }
     let resolved_props = collect_feature_container_properties(id, &dest_dir);
