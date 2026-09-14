@@ -135,8 +135,8 @@ pub fn run(
     // Features install once at container creation; do not re-install on
     // restart of an existing container. On restart, cached metadata still
     // supplies feature lifecycle hooks and customizations.
-    let installed_features = if newly_created {
-        let installed = crate::features::handle_features_with_container(
+    let (installed_features, installed_order) = if newly_created {
+        let (installed, order) = crate::features::handle_features_with_container(
             &cfg.features,
             &cfg.override_feature_install_order,
             Some(&container_name),
@@ -145,7 +145,7 @@ pub fn run(
         )?;
 
         // Store merged feature customizations as a container label
-        let merged_custom = crate::features::collect_feature_customizations(&installed);
+        let merged_custom = crate::features::collect_feature_customizations(&installed, &order);
         if !merged_custom.as_object().is_none_or(|m| m.is_empty()) {
             let json_str = serde_json::to_string(&merged_custom).unwrap_or_default();
             let label_arg = format!("devcontainer.feature_customizations={json_str}");
@@ -172,9 +172,12 @@ pub fn run(
                 );
             }
         }
-        installed
+        (installed, order)
     } else {
-        cfg.features.clone().unwrap_or_default()
+        (
+            cfg.features.clone().unwrap_or_default(),
+            crate::features::feature_ids_sorted(&cfg.features),
+        )
     };
 
     let probed_env = if let Some(probe) = &cfg.user_env_probe
@@ -217,7 +220,8 @@ pub fn run(
         }
     };
 
-    let feature_hooks = crate::features::collect_feature_lifecycle_hooks(&installed_features);
+    let feature_hooks =
+        crate::features::collect_feature_lifecycle_hooks(&installed_features, &installed_order);
 
     let wait_idx = wait_index(&cfg.wait_for);
 
@@ -538,7 +542,7 @@ fn run_compose(
         }
     };
 
-    let installed_features = if newly_created {
+    let (installed_features, installed_order) = if newly_created {
         crate::features::handle_features_with_container(
             &cfg.features,
             &cfg.override_feature_install_order,
@@ -547,7 +551,10 @@ fn run_compose(
             cfg.container_user.as_deref(),
         )?
     } else {
-        cfg.features.clone().unwrap_or_default()
+        (
+            cfg.features.clone().unwrap_or_default(),
+            crate::features::feature_ids_sorted(&cfg.features),
+        )
     };
 
     let workspace_target = cfg
@@ -589,7 +596,8 @@ fn run_compose(
         }
     };
 
-    let feature_hooks = crate::features::collect_feature_lifecycle_hooks(&installed_features);
+    let feature_hooks =
+        crate::features::collect_feature_lifecycle_hooks(&installed_features, &installed_order);
 
     let wait_idx = wait_index(&cfg.wait_for);
 
