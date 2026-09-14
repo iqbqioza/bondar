@@ -263,6 +263,7 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand`. bondar
 - Features are fetched with `oras` (or `docker pull` as a fallback), extracted if needed, copied into the container, and executed via `install.sh` as root.
 - Options are passed as environment variables to `install.sh` (`installsAfter` is excluded).
 - `installsAfter` declared in the `devcontainer.json` feature entry orders features; unknown dependencies are warned. A feature's own `installsAfter` metadata (when available in the feature cache) is also used for ordering; `overrideFeatureInstallOrder` takes precedence over both.
+- `dependsOn` declared in feature metadata installs the dependencies (with the options given there) before the feature, recursively. Circular dependencies are warned and skipped.
 - Features are installed only when the container is created, not on restart.
 - Lifecycle commands declared in feature metadata (`onCreateCommand` ... `postAttachCommand`) run before the user's corresponding lifecycle commands.
 - `customizations` declared by features are merged (objects merged, arrays unioned) and stored as a container label.

@@ -1,16 +1,13 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{BondarError, Result};
 
 /// Collect `customizations` from all fetched feature metadata files and merge
 /// them into a single object. Returns an empty map when nothing is available.
 pub fn collect_feature_customizations(
-    features: &Option<HashMap<String, serde_json::Value>>,
+    feat_map: &HashMap<String, serde_json::Value>,
 ) -> serde_json::Value {
-    let Some(feat_map) = features else {
-        return serde_json::Value::Object(Default::default());
-    };
     let mut merged = serde_json::Map::new();
     // Sorted ids keep the merge deterministic (HashMap iteration is not)
     let mut ids: Vec<&String> = feat_map.keys().collect();
@@ -79,11 +76,8 @@ pub const FEATURE_LIFECYCLE_HOOKS: [&str; 5] = [
 /// deterministic feature order, so they can run before the user's lifecycle
 /// commands.
 pub fn collect_feature_lifecycle_hooks(
-    features: &Option<HashMap<String, serde_json::Value>>,
+    feat_map: &HashMap<String, serde_json::Value>,
 ) -> Vec<(&'static str, serde_json::Value)> {
-    let Some(feat_map) = features else {
-        return Vec::new();
-    };
     let mut ids: Vec<&String> = feat_map.keys().collect();
     ids.sort();
     let mut hooks = Vec::new();
@@ -109,12 +103,12 @@ pub fn handle_features_with_container(
     container_name: Option<&str>,
     remote_user: Option<&str>,
     container_user: Option<&str>,
-) -> Result<()> {
+) -> Result<HashMap<String, serde_json::Value>> {
     let Some(feat_map) = features else {
-        return Ok(());
+        return Ok(HashMap::new());
     };
     if feat_map.is_empty() {
-        return Ok(());
+        return Ok(HashMap::new());
     }
 
     let has_docker = std::process::Command::new("docker")
@@ -124,13 +118,15 @@ pub fn handle_features_with_container(
         .unwrap_or(false);
     if !has_docker {
         eprintln!("Warning: docker not available, cannot install features");
-        return Ok(());
+        return Ok(HashMap::new());
     }
 
     println!("Features requested: {} feature(s)", feat_map.len());
     for (id, opts) in feat_map {
         println!("  - {id}: {opts}");
     }
+
+    let mut installer = FeatureInstaller::new(container_name, remote_user, container_user);
 
     if let Some(order) = override_order {
         println!("Override feature install order: {order:?}");
@@ -155,7 +151,7 @@ pub fn handle_features_with_container(
                 continue;
             }
             if let Some(opts) = feat_map.get(id) {
-                install_feature(id, opts, container_name, remote_user, container_user)?;
+                installer.install(id, opts)?;
             }
         }
         let mut remaining: Vec<&String> =
@@ -163,7 +159,7 @@ pub fn handle_features_with_container(
         remaining.sort();
         for id in remaining {
             if let Some(opts) = feat_map.get(id) {
-                install_feature(id, opts, container_name, remote_user, container_user)?;
+                installer.install(id, opts)?;
             }
         }
     } else {
@@ -196,12 +192,12 @@ pub fn handle_features_with_container(
         println!("Installing features in installsAfter order:");
         for id in sorted {
             if let Some(opts) = feat_map.get(&id) {
-                install_feature(&id, opts, container_name, remote_user, container_user)?;
+                installer.install(&id, opts)?;
             }
         }
     }
 
-    Ok(())
+    Ok(installer.installed)
 }
 
 fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<String> {
@@ -746,45 +742,48 @@ fn resolve_user_home(container: &str, user: &str) -> String {
         .unwrap_or_else(|| format!("/home/{user}"))
 }
 
-fn install_feature(
-    id: &str,
-    opts: &serde_json::Value,
-    container_name: Option<&str>,
-    remote_user: Option<&str>,
-    container_user: Option<&str>,
-) -> Result<()> {
-    if !id.contains('/') && !id.contains('.') {
-        eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
-        return Ok(());
-    }
-    // Per spec, a string option value is shorthand for the `version` option:
-    // "features": {"id": "18"} == {"id": {"version": "18"}}
-    let (effective_id, effective_opts) = if let Some(v) = opts.as_str() {
-        (id.to_string(), serde_json::json!({ "version": v }))
+/// Convert a user-provided feature option value to the effective options.
+/// Per spec, a string value is shorthand for the `version` option:
+/// "features": {"id": "18"} == {"id": {"version": "18"}}
+fn effective_feature_opts(id: &str, opts: &serde_json::Value) -> serde_json::Value {
+    if let Some(v) = opts.as_str() {
+        serde_json::json!({ "version": v })
     } else {
         if !opts.is_object() && !opts.is_null() {
             eprintln!(
                 "Warning: feature '{id}' options must be an object, got {opts}; ignoring options"
             );
         }
-        (id.to_string(), opts.clone())
-    };
+        opts.clone()
+    }
+}
 
-    println!("Attempting to install feature '{effective_id}' with opts {effective_opts}...");
-
-    let dest_dir = feature_cache_dir().join(sanitize_id(&effective_id));
+/// Fetch a feature into the cache. `None` means the feature was skipped
+/// (e.g. its cache directory could not be created).
+fn fetch_feature_to_cache(id: &str) -> Result<Option<PathBuf>> {
+    let dest_dir = feature_cache_dir().join(sanitize_id(id));
     if let Err(e) = std::fs::create_dir_all(&dest_dir) {
         eprintln!("  Warning: could not create feature directory: {e}");
-        return Ok(());
+        return Ok(None);
     }
-    if let Err(e) = fetch_feature(&effective_id, &dest_dir) {
+    if let Err(e) = fetch_feature(id, &dest_dir) {
         // Avoid stale metadata from a previous failed/partial fetch
         let _ = std::fs::remove_dir_all(&dest_dir);
         return Err(e);
     }
+    Ok(Some(dest_dir))
+}
 
-    // Read devcontainer-features.json metadata for installsAfter dependencies
-    if let Some(meta) = read_feature_metadata(&dest_dir) {
+/// Install a feature that is already present in the cache.
+fn install_fetched_feature(
+    id: &str,
+    dest_dir: &Path,
+    opts: &serde_json::Value,
+    container_name: Option<&str>,
+    remote_user: Option<&str>,
+    container_user: Option<&str>,
+) -> Result<()> {
+    if let Some(meta) = read_feature_metadata(dest_dir) {
         if let Some(after) = meta.get("installsAfter").and_then(|v| v.as_array()) {
             let deps: Vec<String> = after
                 .iter()
@@ -814,16 +813,16 @@ fn install_feature(
     }
 
     // Apply defaults for omitted options declared in the feature metadata
-    let effective_opts = merge_feature_option_defaults(&effective_opts, &dest_dir);
+    let effective_opts = merge_feature_option_defaults(opts, dest_dir);
 
     if let Some(container) = container_name {
-        let container_path = format!("/tmp/bondar_features/{}", sanitize_id(&effective_id));
-        if let Err(e) = copy_feature_into_container(&dest_dir, container, &container_path) {
+        let container_path = format!("/tmp/bondar_features/{}", sanitize_id(id));
+        if let Err(e) = copy_feature_into_container(dest_dir, container, &container_path) {
             eprintln!("  Warning: could not copy feature into container: {e}");
             return Ok(());
         }
         install_in_container(
-            &effective_id,
+            id,
             &effective_opts,
             container,
             &container_path,
@@ -832,12 +831,90 @@ fn install_feature(
         )?;
     } else {
         println!(
-            "  Feature {effective_id} fetched to {}. Execution requires a running container (use 'bondar up' first).",
+            "  Feature {id} fetched to {}. Execution requires a running container (use 'bondar up' first).",
             dest_dir.display()
         );
     }
 
     Ok(())
+}
+
+/// Installs features (and their `dependsOn` dependencies) into the container,
+/// depth-first so hard dependencies are always installed first.
+struct FeatureInstaller<'a> {
+    container_name: Option<&'a str>,
+    remote_user: Option<&'a str>,
+    container_user: Option<&'a str>,
+    installed: HashMap<String, serde_json::Value>,
+    visiting: std::collections::HashSet<String>,
+}
+
+impl<'a> FeatureInstaller<'a> {
+    fn new(
+        container_name: Option<&'a str>,
+        remote_user: Option<&'a str>,
+        container_user: Option<&'a str>,
+    ) -> Self {
+        Self {
+            container_name,
+            remote_user,
+            container_user,
+            installed: HashMap::new(),
+            visiting: std::collections::HashSet::new(),
+        }
+    }
+
+    fn install(&mut self, id: &str, opts: &serde_json::Value) -> Result<()> {
+        if self.installed.contains_key(id) {
+            return Ok(());
+        }
+        if !self.visiting.insert(id.to_string()) {
+            eprintln!(
+                "Warning: circular dependsOn detected for feature '{id}'; skipping dependency"
+            );
+            return Ok(());
+        }
+        let result = self.install_new(id, opts);
+        self.visiting.remove(id);
+        result
+    }
+
+    fn install_new(&mut self, id: &str, opts: &serde_json::Value) -> Result<()> {
+        if !id.contains('/') && !id.contains('.') {
+            eprintln!("Warning: feature ID '{id}' looks invalid, skipping");
+            return Ok(());
+        }
+        let effective_opts = effective_feature_opts(id, opts);
+        println!("Attempting to install feature '{id}' with opts {effective_opts}...");
+
+        let Some(dest_dir) = fetch_feature_to_cache(id)? else {
+            return Ok(());
+        };
+
+        // Hard dependencies declared in the feature metadata install first
+        if let Some(meta) = read_feature_metadata(&dest_dir)
+            && let Some(deps) = meta.get("dependsOn").and_then(|v| v.as_object())
+        {
+            for (dep_id, dep_opts) in deps {
+                if dep_id.as_str() == id {
+                    eprintln!("Warning: feature '{id}' dependsOn itself; skipping");
+                    continue;
+                }
+                self.install(dep_id, dep_opts)?;
+            }
+        }
+
+        install_fetched_feature(
+            id,
+            &dest_dir,
+            &effective_opts,
+            self.container_name,
+            self.remote_user,
+            self.container_user,
+        )?;
+        self.installed.insert(id.to_string(), effective_opts);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -862,6 +939,23 @@ mod tests {
         assert_eq!(option_env_name("_x"), "_X");
         assert_eq!(option_env_name("123"), "_");
         assert_eq!(option_env_name(""), "");
+    }
+
+    #[test]
+    fn test_effective_feature_opts() {
+        // String option values are shorthand for the `version` option
+        assert_eq!(
+            effective_feature_opts("ghcr.io/a/b", &serde_json::json!("18")),
+            serde_json::json!({"version": "18"})
+        );
+        assert_eq!(
+            effective_feature_opts("ghcr.io/a/b", &serde_json::json!({"a": 1})),
+            serde_json::json!({"a": 1})
+        );
+        assert_eq!(
+            effective_feature_opts("ghcr.io/a/b", &serde_json::Value::Null),
+            serde_json::Value::Null
+        );
     }
 
     #[test]
@@ -992,10 +1086,10 @@ mod tests {
             )
             .unwrap();
         }
-        let features = Some(HashMap::from([
+        let features = HashMap::from([
             (id_a.to_string(), serde_json::json!({})),
             (id_b.to_string(), serde_json::json!({})),
-        ]));
+        ]);
         let merged = collect_feature_customizations(&features);
         let extensions = merged["vscode"]["extensions"].as_array().unwrap();
         assert_eq!(extensions.len(), 2);
@@ -1019,13 +1113,13 @@ mod tests {
             r#"{"postCreateCommand": "echo feature", "postStartCommand": ["echo", "start"]}"#,
         )
         .unwrap();
-        let features = Some(HashMap::from([(id.to_string(), serde_json::json!({}))]));
+        let features = HashMap::from([(id.to_string(), serde_json::json!({}))]);
         let hooks = collect_feature_lifecycle_hooks(&features);
         assert_eq!(hooks.len(), 2);
         assert_eq!(hooks[0].0, "postCreateCommand");
         assert_eq!(hooks[0].1, serde_json::json!("echo feature"));
         assert_eq!(hooks[1].0, "postStartCommand");
-        assert_eq!(collect_feature_lifecycle_hooks(&None).len(), 0);
+        assert_eq!(collect_feature_lifecycle_hooks(&HashMap::new()).len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1111,18 +1205,18 @@ mod tests {
             r#"{"customizations": {"vscode": {"settings": {"a": 1}}}}"#,
         )
         .unwrap();
-        let features = Some(HashMap::from([(id.to_string(), serde_json::json!({}))]));
+        let features = HashMap::from([(id.to_string(), serde_json::json!({}))]);
         let merged = collect_feature_customizations(&features);
         assert_eq!(merged["vscode"]["settings"]["a"], 1);
 
         // The string version shorthand resolves to the same cache directory
-        let features_str = Some(HashMap::from([(id.to_string(), serde_json::json!("1"))]));
+        let features_str = HashMap::from([(id.to_string(), serde_json::json!("1"))]);
         let merged_str = collect_feature_customizations(&features_str);
         assert_eq!(merged_str["vscode"]["settings"]["a"], 1);
 
         // No features -> empty object
         assert!(
-            collect_feature_customizations(&None)
+            collect_feature_customizations(&HashMap::new())
                 .as_object()
                 .unwrap()
                 .is_empty()

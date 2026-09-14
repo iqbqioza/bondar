@@ -126,9 +126,10 @@ pub fn run(
     host::handle_update_remote_user_uid(&cfg, &container_name)?;
 
     // Features install once at container creation; do not re-install on
-    // restart of an existing container.
-    if newly_created {
-        crate::features::handle_features_with_container(
+    // restart of an existing container. On restart, cached metadata still
+    // supplies feature lifecycle hooks and customizations.
+    let installed_features = if newly_created {
+        let installed = crate::features::handle_features_with_container(
             &cfg.features,
             &cfg.override_feature_install_order,
             Some(&container_name),
@@ -137,7 +138,7 @@ pub fn run(
         )?;
 
         // Store merged feature customizations as a container label
-        let merged_custom = crate::features::collect_feature_customizations(&cfg.features);
+        let merged_custom = crate::features::collect_feature_customizations(&installed);
         if !merged_custom.as_object().is_none_or(|m| m.is_empty()) {
             let json_str = serde_json::to_string(&merged_custom).unwrap_or_default();
             let label_arg = format!("devcontainer.feature_customizations={json_str}");
@@ -164,7 +165,10 @@ pub fn run(
                 );
             }
         }
-    }
+        installed
+    } else {
+        cfg.features.clone().unwrap_or_default()
+    };
 
     let probed_env = if let Some(probe) = &cfg.user_env_probe
         && probe != "none"
@@ -206,7 +210,7 @@ pub fn run(
         }
     };
 
-    let feature_hooks = crate::features::collect_feature_lifecycle_hooks(&cfg.features);
+    let feature_hooks = crate::features::collect_feature_lifecycle_hooks(&installed_features);
 
     let wait_idx = wait_index(&cfg.wait_for);
 
@@ -505,15 +509,6 @@ fn run_compose(
     let container_name = match crate::compose::get_service_container_name(cfg, cfg_path, ws) {
         Ok(name) => {
             host::handle_update_remote_user_uid(cfg, &name)?;
-            if newly_created {
-                crate::features::handle_features_with_container(
-                    &cfg.features,
-                    &cfg.override_feature_install_order,
-                    Some(&name),
-                    cfg.remote_user.as_deref(),
-                    cfg.container_user.as_deref(),
-                )?;
-            }
             name
         }
         Err(e) => {
@@ -524,6 +519,18 @@ fn run_compose(
             println!("  Workspace: {}", ws.display());
             return Ok(());
         }
+    };
+
+    let installed_features = if newly_created {
+        crate::features::handle_features_with_container(
+            &cfg.features,
+            &cfg.override_feature_install_order,
+            Some(&container_name),
+            cfg.remote_user.as_deref(),
+            cfg.container_user.as_deref(),
+        )?
+    } else {
+        cfg.features.clone().unwrap_or_default()
     };
 
     let workspace_target = cfg
@@ -565,7 +572,7 @@ fn run_compose(
         }
     };
 
-    let feature_hooks = crate::features::collect_feature_lifecycle_hooks(&cfg.features);
+    let feature_hooks = crate::features::collect_feature_lifecycle_hooks(&installed_features);
 
     let wait_idx = wait_index(&cfg.wait_for);
 
