@@ -122,8 +122,9 @@ pub fn run(
     }
 
     // Merge the image's devcontainer.metadata (users, env, mounts, ...)
-    if let Some(raw) = docker::image_metadata_label(&image_name, true) {
-        crate::features::apply_image_metadata(&mut cfg, &raw);
+    let image_metadata = docker::image_metadata_label(&image_name, true);
+    if let Some(raw) = &image_metadata {
+        crate::features::apply_image_metadata(&mut cfg, raw);
     }
 
     docker::create_and_start_container(
@@ -230,8 +231,15 @@ pub fn run(
         }
     };
 
-    let feature_hooks =
-        crate::features::collect_feature_lifecycle_hooks(&installed_features, &installed_order);
+    let mut feature_hooks = Vec::new();
+    if let Some(raw) = &image_metadata {
+        // Image metadata hooks (prebuilt features) run before installed ones
+        feature_hooks.extend(crate::features::image_metadata_lifecycle_hooks(raw));
+    }
+    feature_hooks.extend(crate::features::collect_feature_lifecycle_hooks(
+        &installed_features,
+        &installed_order,
+    ));
 
     let wait_idx = wait_index(&cfg.wait_for);
 
@@ -553,8 +561,9 @@ fn run_compose(
     };
 
     // Merge the service image's devcontainer.metadata (users, env, mounts, ...)
-    if let Some(raw) = crate::docker::container_metadata_label(&container_name) {
-        crate::features::apply_image_metadata(&mut merged_cfg, &raw);
+    let image_metadata = crate::docker::container_metadata_label(&container_name);
+    if let Some(raw) = &image_metadata {
+        crate::features::apply_image_metadata(&mut merged_cfg, raw);
     }
     let cfg = &merged_cfg;
 
@@ -615,8 +624,15 @@ fn run_compose(
         }
     };
 
-    let feature_hooks =
-        crate::features::collect_feature_lifecycle_hooks(&installed_features, &installed_order);
+    let mut feature_hooks = Vec::new();
+    if let Some(raw) = &image_metadata {
+        // Image metadata hooks (prebuilt features) run before installed ones
+        feature_hooks.extend(crate::features::image_metadata_lifecycle_hooks(raw));
+    }
+    feature_hooks.extend(crate::features::collect_feature_lifecycle_hooks(
+        &installed_features,
+        &installed_order,
+    ));
 
     let wait_idx = wait_index(&cfg.wait_for);
 

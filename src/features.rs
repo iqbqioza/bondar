@@ -140,6 +140,22 @@ fn metadata_entries(raw: &str) -> Vec<serde_json::Value> {
     }
 }
 
+/// Lifecycle commands declared in the `devcontainer.metadata` image label, in
+/// order, so they can run before the user's own lifecycle commands.
+pub fn image_metadata_lifecycle_hooks(raw: &str) -> Vec<(&'static str, serde_json::Value)> {
+    let mut hooks = Vec::new();
+    for entry in metadata_entries(raw) {
+        for hook in FEATURE_LIFECYCLE_HOOKS {
+            if let Some(value) = entry.get(hook)
+                && !value.is_null()
+            {
+                hooks.push((hook, value.clone()));
+            }
+        }
+    }
+    hooks
+}
+
 /// Merge the `devcontainer.metadata` image label into the configuration:
 /// `remoteUser`/`containerUser`/`userEnvProbe`/`overrideCommand` (when unset)
 /// and container properties (`containerEnv`, `mounts`, `privileged`, `init`,
@@ -1758,6 +1774,18 @@ mod tests {
     fn test_sort_by_installs_after_empty() {
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
         assert!(sort_by_installs_after(&empty).is_empty());
+    }
+
+    #[test]
+    fn test_image_metadata_lifecycle_hooks() {
+        let hooks = image_metadata_lifecycle_hooks(
+            r#"[{"onCreateCommand":"echo a"},{"postCreateCommand":["echo","b"],"postStartCommand":null}]"#,
+        );
+        assert_eq!(hooks.len(), 2);
+        assert_eq!(hooks[0].0, "onCreateCommand");
+        assert_eq!(hooks[0].1, serde_json::json!("echo a"));
+        assert_eq!(hooks[1].0, "postCreateCommand");
+        assert!(image_metadata_lifecycle_hooks("not json").is_empty());
     }
 
     #[test]
