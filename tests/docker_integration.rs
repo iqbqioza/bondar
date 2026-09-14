@@ -330,6 +330,20 @@ fn test_read_configuration() {
         String::from_utf8_lossy(&udp.stderr)
     );
 
+    // Compose configurations default the workspace folder to "/" and do not
+    // require an explicit workspaceFolder (matching the reference CLI)
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"dockerComposeFile": "docker-compose.yml", "service": "app"}"#,
+    )
+    .unwrap();
+    let compose_default = bondar(&["read-configuration", "--workspace-folder", ws_str]);
+    assert!(
+        compose_default.status.success(),
+        "compose without workspaceFolder rejected: {}",
+        String::from_utf8_lossy(&compose_default.stderr)
+    );
+
     // tmpfs object mounts are supported by bondar (docker --mount)
     std::fs::write(
         ws.join(".devcontainer/devcontainer.json"),
