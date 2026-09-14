@@ -46,6 +46,12 @@ if (-not $tag) {
     $tag = [string]$json.tag_name
     if (-not $tag) { throw 'Could not parse the latest release tag from the GitHub API.' }
 }
+
+# Basic sanity check for tag format (applies to BONDAR_VERSION too) to avoid
+# path traversal or newline injection in the download URL.
+if ($tag -match '[/\\]' -or $tag -match '\.\.' -or $tag -match '[\r\n]') {
+    throw "Invalid tag format: $tag"
+}
 Write-Host "Latest release: $tag"
 
 # --- install directory (per-user, no admin) ----------------------------------

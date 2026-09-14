@@ -107,16 +107,18 @@ if [ -z "$tag" ]; then
         echo "error: could not parse the latest release tag from the GitHub API" >&2
         exit 1
     fi
-    # Basic sanity check for tag format to avoid path traversal via BONDAR_VERSION
-    nl='
-'
-    case "$tag" in
-        *'/'*|*'..'*|*"$nl"*)
-            echo "error: invalid tag format: $tag" >&2
-            exit 1
-            ;;
-    esac
 fi
+
+# Basic sanity check for tag format (applies to BONDAR_VERSION too) to avoid
+# path traversal or newline injection in the download URL
+nl='
+'
+case "$tag" in
+    *'/'*|*'\'*|*'..'*|*"$nl"*)
+        echo "error: invalid tag format: $tag" >&2
+        exit 1
+        ;;
+esac
 echo "Latest release: ${tag}"
 
 # --- pick an install directory already on PATH -------------------------------

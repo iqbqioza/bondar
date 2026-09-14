@@ -292,6 +292,15 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
                 .map(|s| s.success())
                 .unwrap_or(false);
         let extracted = if cp_install {
+            // Best effort: without the metadata file, option defaults,
+            // customizations and installsAfter declared by the feature are lost
+            for file in ["devcontainer-feature.json", "devcontainer-features.json"] {
+                let _ = std::process::Command::new("docker")
+                    .args(["cp", &format!("{tmp_name}:/{file}"), dest_str])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
             true
         } else {
             created
@@ -475,9 +484,15 @@ fn install_in_container(
     // install.sh always runs as root; the target users are passed via env
     exec_cmd.arg("--user").arg("root");
     // Per spec: _CONTAINER_USER is the container's user, _REMOTE_USER is the
-    // configured remoteUser; when only one is set it is used for both.
-    let effective_container_user = container_user.or(remote_user);
-    let effective_remote_user = remote_user.or(container_user);
+    // configured remoteUser; when only one is set it is used for both, and
+    // when neither is configured the container's own user is used.
+    let fallback_user = if container_user.is_none() && remote_user.is_none() {
+        Some(resolve_container_user(container))
+    } else {
+        None
+    };
+    let effective_container_user = container_user.or(remote_user).or(fallback_user.as_deref());
+    let effective_remote_user = remote_user.or(container_user).or(fallback_user.as_deref());
     if let Some(user) = effective_container_user {
         let home = resolve_user_home(container, user);
         exec_cmd.arg("-e").arg(format!("_CONTAINER_USER={user}"));
@@ -596,6 +611,54 @@ fn read_feature_metadata(dir: &Path) -> Option<serde_json::Value> {
     None
 }
 
+/// Fill in defaults declared in the feature metadata for options the user
+/// omitted; the spec requires omitted options to be exported with their
+/// default values when `install.sh` runs. User-provided values win and options
+/// without a default are left unset.
+fn merge_feature_option_defaults(opts: &serde_json::Value, dir: &Path) -> serde_json::Value {
+    let Some(meta) = read_feature_metadata(dir) else {
+        return opts.clone();
+    };
+    let Some(declared) = meta.get("options").and_then(|v| v.as_object()) else {
+        return opts.clone();
+    };
+    let mut merged = match opts {
+        serde_json::Value::Object(map) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    for (name, spec) in declared {
+        if merged.contains_key(name) {
+            continue;
+        }
+        if let Some(default) = spec.get("default")
+            && !default.is_null()
+        {
+            merged.insert(name.clone(), default.clone());
+        }
+    }
+    serde_json::Value::Object(merged)
+}
+
+/// The user configured for the container (image `USER`, Dockerfile or compose),
+/// falling back to `root` like Docker does when no user is set.
+fn resolve_container_user(container: &str) -> String {
+    std::process::Command::new("docker")
+        .args(["inspect", "--format", "{{.Config.User}}", container])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "root".to_string())
+}
+
 /// Resolve the user's home directory inside the container via `getent passwd`,
 /// falling back to `/home/{user}` when unavailable (e.g. no getent).
 /// The user is passed as a separate argument (no shell interpolation).
@@ -683,6 +746,9 @@ fn install_feature(
             }
         }
     }
+
+    // Apply defaults for omitted options declared in the feature metadata
+    let effective_opts = merge_feature_option_defaults(&effective_opts, &dest_dir);
 
     if let Some(container) = container_name {
         let container_path = format!("/tmp/bondar_features/{}", sanitize_id(&effective_id));
@@ -809,6 +875,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir2);
         let _ = std::fs::remove_dir_all(&dir3);
         let _ = std::fs::remove_dir_all(&dir4);
+    }
+
+    #[test]
+    fn test_merge_feature_option_defaults() {
+        let dir = std::env::temp_dir().join("bondar-feature-defaults-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("devcontainer-feature.json"),
+            r#"{"id":"x","version":"1.0.0","name":"x","options":{"installZsh":{"type":"boolean","default":true},"version":{"type":"string","default":"latest"},"noDefault":{"type":"string"}}}"#,
+        )
+        .unwrap();
+
+        // User values win; missing options get their declared defaults
+        let merged = merge_feature_option_defaults(&serde_json::json!({"version": "18"}), &dir);
+        assert_eq!(merged["version"], "18");
+        assert_eq!(merged["installZsh"], true);
+        assert!(merged.get("noDefault").is_none());
+
+        // No user options -> all defaults; non-object opts are replaced
+        let merged2 = merge_feature_option_defaults(&serde_json::Value::Null, &dir);
+        assert_eq!(merged2["installZsh"], true);
+        assert_eq!(merged2["version"], "latest");
+
+        // Missing metadata -> unchanged
+        let empty = std::env::temp_dir().join("bondar-feature-defaults-empty");
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir_all(&empty).unwrap();
+        let unchanged = merge_feature_option_defaults(&serde_json::json!({"a": 1}), &empty);
+        assert_eq!(unchanged, serde_json::json!({"a": 1}));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&empty);
     }
 
     #[test]
