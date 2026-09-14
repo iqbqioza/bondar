@@ -82,10 +82,14 @@ pub fn run(
 
     // Feature-declared container properties (env, mounts, privileged, ...)
     // must be merged before the container is created.
-    if !was_existing || remove_existing {
-        let feature_props = crate::features::prefetch_feature_container_properties(&cfg.features)?;
+    let prefetched_features = if !was_existing || remove_existing {
+        let (feature_props, prefetched) =
+            crate::features::prefetch_feature_container_properties(&cfg.features)?;
         crate::features::apply_feature_container_properties(&mut cfg, &feature_props);
-    }
+        prefetched
+    } else {
+        Vec::new()
+    };
 
     // Warn if another container exists for the same workspace (name collision)
     match docker::find_containers_for_workspace(&ws) {
@@ -139,6 +143,7 @@ pub fn run(
         let (installed, order) = crate::features::handle_features_with_container(
             &cfg.features,
             &cfg.override_feature_install_order,
+            &prefetched_features,
             Some(&container_name),
             cfg.remote_user.as_deref(),
             cfg.container_user.as_deref(),
@@ -479,11 +484,14 @@ fn run_compose(
     // Feature-declared container properties must be known before the compose
     // override is generated and the services start.
     let mut merged_cfg = cfg.clone();
-    if !was_existing || remove_existing {
-        let feature_props =
+    let prefetched_features = if !was_existing || remove_existing {
+        let (feature_props, prefetched) =
             crate::features::prefetch_feature_container_properties(&merged_cfg.features)?;
         crate::features::apply_feature_container_properties(&mut merged_cfg, &feature_props);
-    }
+        prefetched
+    } else {
+        Vec::new()
+    };
     let cfg = &merged_cfg;
 
     if let Some(cmd) = &cfg.initialize_command {
@@ -546,6 +554,7 @@ fn run_compose(
         crate::features::handle_features_with_container(
             &cfg.features,
             &cfg.override_feature_install_order,
+            &prefetched_features,
             Some(&container_name),
             cfg.remote_user.as_deref(),
             cfg.container_user.as_deref(),
