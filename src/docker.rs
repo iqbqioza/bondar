@@ -147,48 +147,44 @@ pub fn build_image(
     Ok(())
 }
 
+/// Lowercase, docker-repository-safe suffix: separators are collapsed and
+/// trimmed, and inputs without any ASCII alphanumeric character (e.g. a
+/// directory named in a non-Latin script) fall back to "workspace".
+fn sanitize_image_suffix(input: &str) -> String {
+    let mut out = String::new();
+    for c in input.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "workspace".to_string()
+    } else {
+        out
+    }
+}
+
 pub fn resolve_image_name(config: &DevContainerConfig, workspace_folder: &Path) -> Result<String> {
     if config.effective_has_build() {
-        let base = if let Some(name) = &config.name {
-            let sanitized: String = name
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() {
-                        c.to_ascii_lowercase()
-                    } else {
-                        '-'
-                    }
-                })
-                .collect();
-            let suffix = if sanitized.is_empty() {
-                "workspace".to_string()
-            } else {
-                sanitized
-            };
-            format!("bondar-{suffix}")
+        let raw_suffix = if let Some(name) = &config.name {
+            name.clone()
         } else {
-            let basename = workspace_folder
+            workspace_folder
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("workspace");
-            let sanitized: String = basename
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() {
-                        c.to_ascii_lowercase()
-                    } else {
-                        '-'
-                    }
-                })
-                .collect();
-            let suffix = if sanitized.is_empty() {
-                "workspace".to_string()
-            } else {
-                sanitized
-            };
-            format!("bondar-{suffix}")
+                .unwrap_or("workspace")
+                .to_string()
         };
-        Ok(base)
+        let suffix = sanitize_image_suffix(&raw_suffix);
+        // Include a per-workspace hash so workspaces sharing a directory name
+        // do not overwrite each other's build images.
+        let hash = &devcontainer_id_for(workspace_folder)[..8];
+        Ok(format!("bondar-{suffix}-{hash}"))
     } else if let Some(image) = &config.image {
         Ok(image.clone())
     } else {
@@ -1846,9 +1842,10 @@ mod tests {
             }),
             ..Default::default()
         };
+        let hash_x = devcontainer_id_for(std::path::Path::new("/tmp/x"));
         assert_eq!(
             resolve_image_name(&build_cfg, std::path::Path::new("/tmp/x")).unwrap(),
-            "bondar-my-dev"
+            format!("bondar-my-dev-{}", &hash_x[..8])
         );
 
         // Build without name -> bondar-{basename}
@@ -1863,9 +1860,10 @@ mod tests {
             }),
             ..Default::default()
         };
+        let hash_proj = devcontainer_id_for(std::path::Path::new("/tmp/my-proj"));
         assert_eq!(
             resolve_image_name(&build_unnamed, std::path::Path::new("/tmp/my-proj")).unwrap(),
-            "bondar-my-proj"
+            format!("bondar-my-proj-{}", &hash_proj[..8])
         );
 
         // Image -> as-is
@@ -1881,6 +1879,35 @@ mod tests {
         // Neither -> error
         let empty = DevContainerConfig::default();
         assert!(resolve_image_name(&empty, std::path::Path::new("/tmp/x")).is_err());
+
+        // A workspace whose name has no ASCII alphanumeric characters falls
+        // back to a usable suffix instead of producing an invalid image name
+        let symbol_cfg = DevContainerConfig {
+            build: Some(crate::config::BuildConfig {
+                dockerfile: Some("Dockerfile".to_string()),
+                context: None,
+                args: Default::default(),
+                options: vec![],
+                target: None,
+                cache_from: None,
+            }),
+            ..Default::default()
+        };
+        let symbol_ws = std::path::Path::new("/tmp/日本語");
+        let symbol_hash = devcontainer_id_for(symbol_ws);
+        let name = resolve_image_name(&symbol_cfg, symbol_ws).unwrap();
+        assert_eq!(name, format!("bondar-workspace-{}", &symbol_hash[..8]));
+    }
+
+    #[test]
+    fn test_sanitize_image_suffix() {
+        assert_eq!(sanitize_image_suffix("My Dev"), "my-dev");
+        assert_eq!(sanitize_image_suffix("a!!b"), "a-b");
+        assert_eq!(sanitize_image_suffix("!!a"), "a");
+        assert_eq!(sanitize_image_suffix("日本語"), "workspace");
+        assert_eq!(sanitize_image_suffix(""), "workspace");
+        assert_eq!(sanitize_image_suffix("--a--"), "a");
+        assert_eq!(sanitize_image_suffix("a_b"), "a-b");
     }
 
     #[test]

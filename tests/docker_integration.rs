@@ -3,15 +3,20 @@ use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_bondar");
 
-/// Same FNV-1a hash bondar uses for the per-workspace compose project name.
-fn project_name_for(ws: &std::path::Path) -> String {
+/// Same FNV-1a hash bondar uses for per-workspace compose projects/image names.
+fn workspace_hash8(ws: &std::path::Path) -> String {
     let ws_str = ws.to_string_lossy().to_string();
     let mut hash: u64 = 14695981039346656037;
     for b in ws_str.bytes() {
         hash ^= u64::from(b);
         hash = hash.wrapping_mul(1099511628211);
     }
-    format!("bondar-{}", &format!("{hash:016x}")[..8])
+    format!("{hash:016x}")[..8].to_string()
+}
+
+/// Same FNV-1a hash bondar uses for the per-workspace compose project name.
+fn project_name_for(ws: &std::path::Path) -> String {
+    format!("bondar-{}", workspace_hash8(ws))
 }
 
 fn docker_available() -> bool {
@@ -137,7 +142,11 @@ fn test_build_roundtrip() {
     let down = bondar(&["down", "--workspace-folder", ws_str]);
     assert!(down.status.success());
     let _ = Command::new("docker")
-        .args(["rmi", "-f", "bondar-int-build"])
+        .args([
+            "rmi",
+            "-f",
+            &format!("bondar-int-build-{}", workspace_hash8(&ws)),
+        ])
         .output();
 
     cleanup(&ws);
@@ -600,7 +609,11 @@ fn test_build_no_cache() {
     );
 
     let _ = Command::new("docker")
-        .args(["rmi", "-f", "bondar-int-nocache"])
+        .args([
+            "rmi",
+            "-f",
+            &format!("bondar-int-nocache-{}", workspace_hash8(&ws)),
+        ])
         .output();
     cleanup(&ws);
 }
