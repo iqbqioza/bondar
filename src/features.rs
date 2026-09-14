@@ -1102,9 +1102,11 @@ fn resolve_user_home(container: &str, user: &str) -> String {
         .unwrap_or_else(|| format!("/home/{user}"))
 }
 
-/// Feature id without its version tag ("ghcr.io/a/b:1" -> "ghcr.io/a/b").
+/// Feature id without its version tag or digest
+/// ("ghcr.io/a/b:1" -> "ghcr.io/a/b", "ghcr.io/a/b@sha256:..." -> "ghcr.io/a/b").
 /// Registry ports ("localhost:5001/a/b") are not mistaken for tags.
 fn canonical_feature_id(id: &str) -> &str {
+    let id = id.split('@').next().unwrap_or(id);
     match id.rsplit_once(':') {
         Some((base, tag)) if !tag.is_empty() && !tag.contains('/') => base,
         _ => id,
@@ -1329,6 +1331,15 @@ mod tests {
         );
         // Path segments containing ':' keep the whole id
         assert_eq!(canonical_feature_id("ghcr.io/a/b:"), "ghcr.io/a/b:");
+        // Digests are stripped as well
+        assert_eq!(
+            canonical_feature_id("ghcr.io/a/b@sha256:abc123"),
+            "ghcr.io/a/b"
+        );
+        assert_eq!(
+            canonical_feature_id("localhost:5001/a/b@sha256:abc123"),
+            "localhost:5001/a/b"
+        );
     }
 
     #[test]
