@@ -6,6 +6,93 @@ use std::process::{Command, Stdio};
 use crate::config::{DevContainerConfig, MountValue};
 use crate::error::{BondarError, Result};
 
+/// Parse the `devcontainer.metadata` image label (a JSON array of partial
+/// configurations, or a single object) and return the merged `remoteUser` and
+/// `containerUser` defaults.
+pub fn parse_image_user_defaults(raw: &str) -> (Option<String>, Option<String>) {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return (None, None);
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return (None, None);
+    };
+    let entries: Vec<&serde_json::Value> = match &value {
+        serde_json::Value::Array(items) => items.iter().collect(),
+        other => vec![other],
+    };
+    let mut remote_user = None;
+    let mut container_user = None;
+    for entry in entries {
+        if let Some(user) = entry.get("remoteUser").and_then(|v| v.as_str())
+            && !user.is_empty()
+        {
+            remote_user = Some(user.to_string());
+        }
+        if let Some(user) = entry.get("containerUser").and_then(|v| v.as_str())
+            && !user.is_empty()
+        {
+            container_user = Some(user.to_string());
+        }
+    }
+    (remote_user, container_user)
+}
+
+/// Read the `devcontainer.metadata` label of an image. The image is pulled when
+/// it is not available locally (docker run would pull it anyway).
+pub fn image_user_defaults(image: &str) -> (Option<String>, Option<String>) {
+    let inspect = || {
+        Command::new("docker")
+            .args([
+                "image",
+                "inspect",
+                "--format",
+                "{{index .Config.Labels \"devcontainer.metadata\"}}",
+                image,
+            ])
+            .output()
+    };
+    let mut output = match inspect() {
+        Ok(o) => o,
+        Err(_) => return (None, None),
+    };
+    if !output.status.success() {
+        // Pull quietly; a real pull failure is reported by docker run later
+        let _ = Command::new("docker")
+            .args(["pull", image])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        output = match inspect() {
+            Ok(o) => o,
+            Err(_) => return (None, None),
+        };
+    }
+    if !output.status.success() {
+        return (None, None);
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    parse_image_user_defaults(&raw)
+}
+
+/// Resolve `remoteUser`/`containerUser` defaults from the image a container runs.
+pub fn container_image_user_defaults(container: &str) -> (Option<String>, Option<String>) {
+    let output = Command::new("docker")
+        .args(["inspect", "--format", "{{.Config.Image}}", container])
+        .output();
+    let Ok(output) = output else {
+        return (None, None);
+    };
+    if !output.status.success() {
+        return (None, None);
+    }
+    let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if image.is_empty() {
+        return (None, None);
+    }
+    image_user_defaults(&image)
+}
+
 pub fn check_docker_available() -> Result<()> {
     // Distinguish a missing CLI from an unreachable daemon
     let cli_ok = Command::new("docker")
@@ -1277,6 +1364,29 @@ pub fn get_workspace_folder(provided: Option<PathBuf>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_image_user_defaults() {
+        // Array form (later entries win)
+        assert_eq!(
+            parse_image_user_defaults(
+                r#"[{"remoteUser":"vscode"},{"remoteUser":"node","containerUser":"root"}]"#
+            ),
+            (Some("node".to_string()), Some("root".to_string()))
+        );
+        // Single object
+        assert_eq!(
+            parse_image_user_defaults(r#"{"remoteUser":"vscode"}"#),
+            (Some("vscode".to_string()), None)
+        );
+        // Empty / invalid / unrelated metadata
+        assert_eq!(parse_image_user_defaults(""), (None, None));
+        assert_eq!(parse_image_user_defaults("not json"), (None, None));
+        assert_eq!(
+            parse_image_user_defaults(r#"[{"id":"features/x"}]"#),
+            (None, None)
+        );
+    }
 
     #[test]
     fn test_publish_port_arg_number() {

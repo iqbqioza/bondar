@@ -1074,3 +1074,58 @@ fn test_down_default_has_no_unknown_action_warning() {
 
     cleanup(&ws);
 }
+
+#[test]
+fn test_image_metadata_remote_user() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "image-meta",
+        r#"{"name": "int-image-meta", "image": "bondar-int-image-meta:1", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    );
+    std::fs::write(
+        ws.join("Dockerfile"),
+        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"remoteUser\":\"vscode\"}]'\n",
+    )
+    .unwrap();
+    let build = Command::new("docker")
+        .args(["build", "-t", "bondar-int-image-meta:1"])
+        .arg(&ws)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "image build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let ws_str = ws.to_str().unwrap();
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    // remoteUser comes from the image metadata label
+    let exec = bondar(&["exec", "--workspace-folder", ws_str, "--", "id", "-un"]);
+    assert!(
+        exec.status.success(),
+        "exec failed: {}",
+        String::from_utf8_lossy(&exec.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&exec.stdout).contains("vscode"),
+        "remoteUser from image metadata not applied: {}",
+        String::from_utf8_lossy(&exec.stdout)
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    let _ = Command::new("docker")
+        .args(["rmi", "-f", "bondar-int-image-meta:1"])
+        .output();
+    cleanup(&ws);
+}

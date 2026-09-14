@@ -308,6 +308,8 @@ Warnings are emitted when the host does not satisfy the requirements (not enforc
 
 ## Lifecycle of the container user
 
+When `remoteUser`/`containerUser` are not set in `devcontainer.json`, they are inherited from the image's `devcontainer.metadata` label (like the reference CLI).
+
 `updateRemoteUserUID` (default `true`) synchronizes the `remoteUser`/`containerUser` UID and GID with the host:
 
 1. If the user does not exist in the container, it is created (`groupadd` + `useradd`).
