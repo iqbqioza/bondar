@@ -1191,10 +1191,12 @@ pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
     resolved
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn exec_in_container(
     container_name: &str,
     user: Option<&str>,
     workdir: Option<&str>,
+    container_workspace: &str,
     command: &[String],
     env: Option<&HashMap<String, String>>,
     workspace_folder: Option<&Path>,
@@ -1231,9 +1233,10 @@ pub fn exec_in_container(
             } else {
                 v.clone()
             };
+            // `${containerWorkspaceFolder}` always refers to the configured
+            // workspace folder, not an `exec --workdir` override.
             let expanded_v = if let Some(ws) = workspace_folder {
-                let target = workdir.unwrap_or("/workspace");
-                expand_vars_for_host_with_target(&from_map, ws, target)
+                expand_vars_for_host_with_target(&from_map, ws, container_workspace)
             } else {
                 from_map
             };

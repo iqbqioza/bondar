@@ -159,7 +159,7 @@ fn test_compose_roundtrip() {
     .unwrap();
     std::fs::write(
         ws.join(".devcontainer/devcontainer.json"),
-        r#"{"name": "int-compose", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace"}"#,
+        r#"{"name": "int-compose", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "remoteEnv": {"WS": "${containerWorkspaceFolder}"}}"#,
     )
     .unwrap();
     let ws_str = ws.to_str().unwrap();
@@ -186,6 +186,30 @@ fn test_compose_roundtrip() {
         String::from_utf8_lossy(&exec.stderr)
     );
     assert!(String::from_utf8_lossy(&exec.stdout).contains("compose-ok"));
+
+    // `--workdir` must not change what ${containerWorkspaceFolder} expands to
+    let exec_workdir = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--workdir",
+        "/tmp",
+        "--",
+        "sh",
+        "-c",
+        "pwd && echo \"WS=$WS\"",
+    ]);
+    assert!(
+        exec_workdir.status.success(),
+        "compose exec --workdir failed: {}",
+        String::from_utf8_lossy(&exec_workdir.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&exec_workdir.stdout);
+    assert!(stdout.contains("/tmp"), "workdir not applied: {stdout}");
+    assert!(
+        stdout.contains("WS=/workspace"),
+        "containerWorkspaceFolder expanded from --workdir: {stdout}"
+    );
 
     let down = bondar(&["down", "--workspace-folder", ws_str]);
     assert!(
@@ -517,13 +541,14 @@ fn test_exec_with_user_and_workdir() {
     }
     let ws = make_workspace(
         "execopts",
-        r#"{"name": "int-execopts", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+        r#"{"name": "int-execopts", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "remoteEnv": {"WS": "${containerWorkspaceFolder}", "WB": "${containerWorkspaceFolderBasename}"}, "userEnvProbe": "none"}"#,
     );
     let ws_str = ws.to_str().unwrap();
 
     let up = bondar(&["up", "--workspace-folder", ws_str]);
     assert!(up.status.success());
 
+    // `--workdir` must not change what ${containerWorkspaceFolder} expands to
     let exec = bondar(&[
         "exec",
         "--workspace-folder",
@@ -533,14 +558,21 @@ fn test_exec_with_user_and_workdir() {
         "--workdir",
         "/tmp",
         "--",
-        "pwd",
+        "sh",
+        "-c",
+        "pwd && echo \"WS=$WS WB=$WB\"",
     ]);
     assert!(
         exec.status.success(),
         "exec failed: {}",
         String::from_utf8_lossy(&exec.stderr)
     );
-    assert!(String::from_utf8_lossy(&exec.stdout).contains("/tmp"));
+    let stdout = String::from_utf8_lossy(&exec.stdout);
+    assert!(stdout.contains("/tmp"), "workdir not applied: {stdout}");
+    assert!(
+        stdout.contains("WS=/workspace WB=workspace"),
+        "containerWorkspaceFolder expanded from --workdir: {stdout}"
+    );
 
     let down = bondar(&["down", "--workspace-folder", ws_str]);
     assert!(down.status.success());

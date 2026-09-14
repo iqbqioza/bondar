@@ -67,16 +67,17 @@ pub fn run(
     });
 
     let env = merged_exec_env(&cfg, &container_name, exec_user.as_deref());
-    let default_target = cfg.workspace_folder_or_default();
+    // `${containerWorkspaceFolder}` expansions always use the configured
+    // workspace folder, even when `--workdir` overrides the working directory.
+    let container_workspace = cfg.workspace_folder_or_default();
     let container_env_map: std::collections::HashMap<String, String> = cfg
         .container_env
         .iter()
         .map(|(k, v)| {
-            let target = exec_workdir.as_deref().unwrap_or(&default_target);
             let resolved = docker::resolve_container_env_value(v, &cfg.container_env);
             (
                 k.clone(),
-                docker::expand_vars_for_host_with_target(&resolved, &ws, target),
+                docker::expand_vars_for_host_with_target(&resolved, &ws, &container_workspace),
             )
         })
         .collect();
@@ -84,6 +85,7 @@ pub fn run(
         &container_name,
         exec_user.as_deref(),
         exec_workdir.as_deref(),
+        &container_workspace,
         &command,
         env.as_ref(),
         Some(&ws),
