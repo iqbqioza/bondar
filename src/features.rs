@@ -214,6 +214,31 @@ pub fn apply_image_metadata(config: &mut crate::config::DevContainerConfig, raw:
         {
             config.override_command = Some(value);
         }
+        if config.update_remote_user_uid.is_none()
+            && let Some(value) = entry.get("updateRemoteUserUID").and_then(|v| v.as_bool())
+        {
+            config.update_remote_user_uid = Some(value);
+        }
+        if config.wait_for.is_none()
+            && let Some(wait) = entry.get("waitFor").and_then(|v| v.as_str())
+            && !wait.is_empty()
+        {
+            config.wait_for = Some(wait.to_string());
+        }
+        if let Some(remote_env) = entry.get("remoteEnv").and_then(|v| v.as_object()) {
+            for (key, value) in remote_env {
+                if config.remote_env.contains_key(key) {
+                    continue;
+                }
+                if value.is_null() {
+                    config.remote_env.insert(key.clone(), None);
+                } else if let Some(value) = value.as_str() {
+                    config
+                        .remote_env
+                        .insert(key.clone(), Some(value.to_string()));
+                }
+            }
+        }
         merge_feature_container_properties(
             &mut props,
             container_properties_from_value(entry, "image metadata"),
@@ -1873,7 +1898,7 @@ mod tests {
         };
         apply_image_metadata(
             &mut cfg,
-            r#"[{"remoteUser":"vscode"},{"containerEnv":{"FROM_IMAGE":"1","SHARED":"lost"},"mounts":[{"type":"volume","source":"v","target":"/v"}],"privileged":true,"capAdd":["SYS_PTRACE"],"userEnvProbe":"loginShell"}]"#,
+            r#"[{"remoteUser":"vscode"},{"containerEnv":{"FROM_IMAGE":"1","SHARED":"lost"},"mounts":[{"type":"volume","source":"v","target":"/v"}],"privileged":true,"capAdd":["SYS_PTRACE"],"userEnvProbe":"loginShell","updateRemoteUserUID":false,"waitFor":"postCreateCommand","remoteEnv":{"META_R":"1","UNSET_R":null}}]"#,
         );
         assert_eq!(cfg.remote_user.as_deref(), Some("vscode"));
         assert_eq!(cfg.container_env.get("SHARED").unwrap(), "user");
@@ -1882,6 +1907,14 @@ mod tests {
         assert_eq!(cfg.privileged, Some(true));
         assert_eq!(cfg.cap_add, vec!["SYS_PTRACE".to_string()]);
         assert_eq!(cfg.user_env_probe.as_deref(), Some("loginShell"));
+        assert_eq!(cfg.update_remote_user_uid, Some(false));
+        assert_eq!(cfg.wait_for.as_deref(), Some("postCreateCommand"));
+        assert_eq!(
+            cfg.remote_env.get("META_R").and_then(|v| v.clone()),
+            Some("1".to_string())
+        );
+        assert!(cfg.remote_env.contains_key("UNSET_R"));
+        assert_eq!(cfg.remote_env.get("UNSET_R").cloned().flatten(), None);
         // User values are not overridden by metadata
         let mut cfg2 = crate::config::DevContainerConfig {
             remote_user: Some("me".to_string()),
