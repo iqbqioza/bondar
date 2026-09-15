@@ -404,6 +404,14 @@ pub fn handle_update_remote_user_uid(
     Ok(())
 }
 
+/// Whether the value is a supported `userEnvProbe` mode.
+pub fn is_known_probe(probe: &str) -> bool {
+    matches!(
+        probe,
+        "none" | "interactiveShell" | "loginShell" | "loginInteractiveShell"
+    )
+}
+
 pub fn probe_user_env(
     container_name: &str,
     user: Option<&str>,
@@ -558,6 +566,16 @@ fn parse_id_output(output: &str, prefix: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_known_probe() {
+        assert!(is_known_probe("none"));
+        assert!(is_known_probe("interactiveShell"));
+        assert!(is_known_probe("loginShell"));
+        assert!(is_known_probe("loginInteractiveShell"));
+        assert!(!is_known_probe("bogus"));
+        assert!(!is_known_probe(""));
+    }
 
     #[test]
     fn test_parse_size() {
