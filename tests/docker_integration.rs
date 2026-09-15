@@ -1553,3 +1553,68 @@ fn test_container_exiting_immediately_warns() {
         .output();
     cleanup(&ws);
 }
+
+#[test]
+fn test_shutdown_action_from_image_metadata() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "shutdown-meta",
+        r#"{"name": "int-shutdown-meta", "image": "bondar-int-shutdown-meta:1", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    );
+    std::fs::write(
+        ws.join("Dockerfile"),
+        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"shutdownAction\":\"stopContainer\"}]'\n",
+    )
+    .unwrap();
+    let build = Command::new("docker")
+        .args(["build", "-t", "bondar-int-shutdown-meta:1"])
+        .arg(&ws)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "image build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    // Without a config shutdownAction, the image metadata says stopContainer
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(
+        down.status.success(),
+        "down failed: {}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+    let running = Command::new("docker")
+        .args([
+            "inspect",
+            "-f",
+            "{{.State.Running}}",
+            "bondar-int-shutdown-meta",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&running.stdout).trim(),
+        "false",
+        "container should be stopped and kept"
+    );
+
+    let _ = Command::new("docker")
+        .args(["rm", "-f", "bondar-int-shutdown-meta"])
+        .output();
+    let _ = Command::new("docker")
+        .args(["rmi", "-f", "bondar-int-shutdown-meta:1"])
+        .output();
+    cleanup(&ws);
+}

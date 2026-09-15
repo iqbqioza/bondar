@@ -578,7 +578,21 @@ pub fn compose_down(
     // - "none": do nothing
     // - "stopCompose": stop services but keep them
     // - "stopContainer": stop the primary container but keep it
-    let shutdown = config.shutdown_action.as_deref().unwrap_or("remove");
+    // The service image metadata may declare shutdownAction when the config
+    // does not
+    let shutdown = match config.shutdown_action.clone() {
+        Some(action) => action,
+        None => {
+            let mut from_metadata = None;
+            if let Ok(name) = get_service_container_name(config, config_path, workspace_folder)
+                && let Some(raw) = crate::docker::container_metadata_label(&name)
+            {
+                from_metadata = crate::features::image_metadata_shutdown_action(&raw);
+            }
+            from_metadata.unwrap_or_else(|| "remove".to_string())
+        }
+    };
+    let shutdown = shutdown.as_str();
     if shutdown == "none" {
         println!("shutdownAction is 'none', skipping compose down");
         return Ok(());

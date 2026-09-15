@@ -178,6 +178,19 @@ pub fn declared_entrypoints(raw: &str) -> Vec<String> {
     entrypoints
 }
 
+/// `shutdownAction` declared in image metadata (last entry wins).
+pub fn image_metadata_shutdown_action(raw: &str) -> Option<String> {
+    let mut action = None;
+    for entry in metadata_entries(raw) {
+        if let Some(value) = entry.get("shutdownAction").and_then(|v| v.as_str())
+            && !value.is_empty()
+        {
+            action = Some(value.to_string());
+        }
+    }
+    action
+}
+
 /// Merge the `devcontainer.metadata` image label into the configuration:
 /// `remoteUser`/`containerUser`/`userEnvProbe`/`overrideCommand` (when unset)
 /// and container properties (`containerEnv`, `mounts`, `privileged`, `init`,
@@ -1866,6 +1879,23 @@ mod tests {
         apply_image_metadata(&mut cfg, &double_encoded);
         assert_eq!(cfg.remote_user.as_deref(), Some("vscode"));
         assert_eq!(cfg.container_env.get("A").unwrap(), "1");
+    }
+
+    #[test]
+    fn test_image_metadata_shutdown_action() {
+        assert_eq!(
+            image_metadata_shutdown_action(r#"[{"shutdownAction":"stopContainer"}]"#).as_deref(),
+            Some("stopContainer")
+        );
+        // Later entries win
+        assert_eq!(
+            image_metadata_shutdown_action(
+                r#"[{"shutdownAction":"stopContainer"},{"shutdownAction":"none"}]"#
+            )
+            .as_deref(),
+            Some("none")
+        );
+        assert_eq!(image_metadata_shutdown_action("not json"), None);
     }
 
     #[test]
