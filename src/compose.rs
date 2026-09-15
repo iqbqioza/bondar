@@ -546,6 +546,8 @@ pub fn compose_up(
     let (mut cmd, override_path) = compose_base_command(config, config_path, workspace_folder)?;
     cmd.arg("up");
     cmd.arg("-d");
+    // Containers of services removed from the compose file should not linger
+    cmd.arg("--remove-orphans");
     if remove_existing {
         cmd.arg("--force-recreate");
     }
