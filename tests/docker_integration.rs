@@ -1277,3 +1277,63 @@ fn test_stale_container_config_warning() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_compose_down_removes_orphans() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-compose-orphans");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n  db:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-compose-orphans", "dockerComposeFile": "../docker-compose.yml", "service": "app", "runServices": ["db"], "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "compose up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    // Remove the "db" service from the compose file: its container becomes an orphan
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n",
+    )
+    .unwrap();
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(
+        down.status.success(),
+        "compose down failed: {}",
+        String::from_utf8_lossy(&down.stderr)
+    );
+
+    let project = project_name_for(&ws);
+    let leftover = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "-q",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        leftover.stdout.is_empty(),
+        "orphan containers were not removed"
+    );
+    cleanup(&ws);
+}

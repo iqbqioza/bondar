@@ -576,6 +576,10 @@ pub fn compose_down(
     if let Some(service) = target_service {
         cmd.arg(service);
     }
+    if action == "down" {
+        // Remove containers of services that are no longer in the compose file
+        cmd.arg("--remove-orphans");
+    }
     cmd.current_dir(workspace_folder);
     cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
     let status = match cmd.status() {
