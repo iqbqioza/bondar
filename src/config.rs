@@ -514,6 +514,11 @@ impl DevContainerConfig {
                         "'features' keys must not be empty".to_string(),
                     ));
                 }
+                if !id.contains('/') && !id.contains('.') {
+                    eprintln!(
+                        "Warning: feature ID '{id}' does not look like an OCI reference or path and will be skipped"
+                    );
+                }
                 if let Some(options) = opts.as_object() {
                     for key in options.keys() {
                         if key.trim().is_empty() {

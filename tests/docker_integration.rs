@@ -1712,3 +1712,20 @@ fn test_build_no_cache_without_build_warns() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_malformed_feature_id_warns() {
+    let ws = make_workspace(
+        "feature-id",
+        r#"{"name": "int-feature-id", "image": "ubuntu:22.04", "features": {"badid": {}}}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let out = bondar(&["build", "--workspace-folder", ws_str]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("does not look like an OCI reference"),
+        "expected a feature id warning: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}
