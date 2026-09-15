@@ -338,6 +338,13 @@ impl DevContainerConfig {
                     }
                 }
                 MountValue::Object(o) => {
+                    if let Some(source) = &o.source
+                        && source.trim().is_empty()
+                    {
+                        return Err(BondarError::Config(
+                            "'mounts' source must not be empty".to_string(),
+                        ));
+                    }
                     if let Some(t) = &o.target
                         && t.trim().is_empty()
                     {
@@ -1021,6 +1028,22 @@ mod tests {
         let abs: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "workspaceFolder": "/ws"}"#).unwrap();
         assert!(abs.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_mount_source() {
+        let bad: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"type": "bind", "source": "", "target": "/x"}]}"#,
+        )
+        .unwrap();
+        assert!(bad.validate().is_err());
+
+        // Anonymous volumes have no source and stay valid
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"type": "volume", "target": "/x"}]}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]
