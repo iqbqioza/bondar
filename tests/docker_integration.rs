@@ -1978,3 +1978,20 @@ fn test_compose_path_whitespace_warns() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_run_args_name_warns() {
+    let ws = make_workspace(
+        "runargs-name",
+        r#"{"name": "int-runargs-name", "image": "ubuntu:22.04", "runArgs": ["--name", "custom-name"]}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let out = bondar(&["build", "--workspace-folder", ws_str]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("overrides bondar's container name"),
+        "expected a runArgs --name warning: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}

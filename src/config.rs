@@ -444,6 +444,11 @@ impl DevContainerConfig {
                     "'runArgs' entries must not be empty".to_string(),
                 ));
             }
+            if arg == "--name" || arg.starts_with("--name=") {
+                eprintln!(
+                    "Warning: 'runArgs' contains --name, which overrides bondar's container name and can break exec/down"
+                );
+            }
         }
         for s in &self.run_services {
             if s.trim().is_empty() {
