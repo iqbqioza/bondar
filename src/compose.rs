@@ -41,6 +41,9 @@ fn compose_files_args(
             workspace_folder,
             &container_target,
         );
+        if expanded.trim() != expanded {
+            eprintln!("Warning: compose file path '{expanded}' has surrounding whitespace");
+        }
         let path = config_dir.join(&expanded);
         if !path.exists() {
             eprintln!("Warning: compose file not found: {}", path.display());

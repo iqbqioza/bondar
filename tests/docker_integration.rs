@@ -1954,3 +1954,27 @@ fn test_exec_relative_workdir_rejected() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_compose_path_whitespace_warns() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-compose-ws-path");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-compose-ws-path", "dockerComposeFile": " ../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+    let out = bondar(&["build", "--workspace-folder", ws_str]);
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("surrounding whitespace"),
+        "expected a whitespace warning: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}
