@@ -1633,3 +1633,21 @@ fn test_shutdown_action_from_image_metadata() {
         .output();
     cleanup(&ws);
 }
+
+#[test]
+fn test_name_and_container_name_warning() {
+    let ws = make_workspace(
+        "name-conflict",
+        r#"{"name": "my-name", "containerName": "my-container", "image": "ubuntu:22.04"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    // `build` goes through load_config (read-configuration does not)
+    let out = bondar(&["build", "--workspace-folder", ws_str]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("both 'name' and 'containerName'"),
+        "expected a precedence warning: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}
