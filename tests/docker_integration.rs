@@ -1829,6 +1829,16 @@ fn test_exec_paused_container_error() {
             .unwrap()
             .success()
     );
+
+    // `up` on a paused existing container warns
+    let up2 = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(up2.status.success());
+    assert!(
+        String::from_utf8_lossy(&up2.stderr).contains("is paused"),
+        "expected a paused-container warning: {}",
+        String::from_utf8_lossy(&up2.stderr)
+    );
+
     let exec = bondar(&["exec", "--workspace-folder", ws_str, "--", "true"]);
     assert!(!exec.status.success());
     assert!(

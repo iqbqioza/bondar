@@ -496,6 +496,11 @@ pub fn create_and_start_container(
             }
         }
         if !remove_existing && running {
+            if matches!(container_state(container_name), Some((true, true))) {
+                eprintln!(
+                    "Warning: container {container_name} is paused; exec and lifecycle steps will fail until it is unpaused"
+                );
+            }
             println!("Container {container_name} is already running");
             return Ok(());
         }
