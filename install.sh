@@ -206,6 +206,10 @@ download "$url" "$tmpdir/bondar" || {
     echo "error: failed to download the bondar release asset" >&2
     exit 1
 }
+if [ ! -s "$tmpdir/bondar" ]; then
+    echo "error: the downloaded bondar asset is empty" >&2
+    exit 1
+fi
 
 # Checksum verification (SHA256SUMS ships with the release)
 if download "${DOWNLOAD_BASE}/${tag}/SHA256SUMS" "$tmpdir/SHA256SUMS" 2>/dev/null; then
