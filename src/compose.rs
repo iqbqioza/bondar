@@ -59,6 +59,7 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
     let mut target = None;
     let mut readonly = false;
     let mut is_tmpfs = false;
+    let mut is_npipe = false;
     let mut is_bind = false;
     for part in mount.split(',') {
         let part = part.trim();
@@ -69,6 +70,7 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
             match key {
                 "type" => {
                     is_tmpfs = value == "tmpfs";
+                    is_npipe = value == "npipe";
                     is_bind = value == "bind";
                 }
                 "source" | "src" => source = Some(value),
@@ -83,8 +85,8 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
             }
         }
     }
-    // tmpfs mounts have no short-syntax equivalent in compose
-    if is_tmpfs {
+    // tmpfs/npipe mounts have no short-syntax equivalent in compose
+    if is_tmpfs || is_npipe {
         return None;
     }
     let source = source.unwrap_or_default();
@@ -229,10 +231,16 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
                 }
             }
             MountValue::Object(obj) => {
-                // tmpfs mounts have no short-syntax equivalent in compose
+                // tmpfs/npipe mounts have no short-syntax equivalent in compose
                 if obj.mount_type.as_deref() == Some("tmpfs") {
                     eprintln!(
                         "Warning: tmpfs mount is skipped in compose override (no short-syntax equivalent)"
+                    );
+                    continue;
+                }
+                if obj.mount_type.as_deref() == Some("npipe") {
+                    eprintln!(
+                        "Warning: npipe mount is skipped in compose override (no short-syntax equivalent)"
                     );
                     continue;
                 }
@@ -888,6 +896,14 @@ mod tests {
     fn test_mount_string_tmpfs_not_supported() {
         assert_eq!(
             mount_string_to_compose_volume("type=tmpfs,target=/data"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_mount_string_npipe_not_supported() {
+        assert_eq!(
+            mount_string_to_compose_volume("type=npipe,source=//./pipe/x,target=//./pipe/x"),
             None
         );
     }
