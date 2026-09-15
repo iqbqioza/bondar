@@ -79,6 +79,20 @@ download() { # url output_file
     fi
 }
 
+sha256_of() { # file -> hex digest on stdout, empty when no tool is available
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$1" | awk '{print $NF}'
+    fi
+}
+
+check_tool_available() {
+    command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1
+}
+
 on_path() { # dir
     # Use fixed-string grep and handle trailing slashes (PATH may contain /foo vs /foo/)
     dir=${1%/}
@@ -192,17 +206,15 @@ download "$url" "$tmpdir/bondar" || {
     exit 1
 }
 
-# Checksum verification (best effort; SHA256SUMS ships with the release)
+# Checksum verification (SHA256SUMS ships with the release)
 if download "${DOWNLOAD_BASE}/${tag}/SHA256SUMS" "$tmpdir/SHA256SUMS" 2>/dev/null; then
-    if command -v sha256sum >/dev/null 2>&1; then
-        sum=$(sha256sum "$tmpdir/bondar" | awk '{print $1}')
-    elif command -v shasum >/dev/null 2>&1; then
-        sum=$(shasum -a 256 "$tmpdir/bondar" | awk '{print $1}')
-    else
-        sum=""
-    fi
+    sum=$(sha256_of "$tmpdir/bondar")
     if [ -z "$sum" ]; then
-        echo "warning: no sha256sum/shasum found; skipping checksum verification" >&2
+        if [ "${BONDAR_INSECURE:-}" != "1" ]; then
+            echo "error: no sha256sum/shasum/openssl found; cannot verify ${asset} (use BONDAR_INSECURE=1 to skip)" >&2
+            exit 1
+        fi
+        echo "warning: no checksum tool found; proceeding without verification due to BONDAR_INSECURE=1" >&2
     elif ! grep -F -- "$sum" "$tmpdir/SHA256SUMS" | grep -F -q -- "$asset"; then
         echo "error: checksum verification failed for ${asset}" >&2
         exit 1
@@ -210,7 +222,7 @@ if download "${DOWNLOAD_BASE}/${tag}/SHA256SUMS" "$tmpdir/SHA256SUMS" 2>/dev/nul
         echo "Checksum verified."
     fi
 else
-    if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+    if check_tool_available; then
         echo "error: SHA256SUMS not found for ${tag}; cannot verify ${asset} (use BONDAR_INSECURE=1 to skip)" >&2
         if [ "${BONDAR_INSECURE:-}" != "1" ]; then
             exit 1
