@@ -666,6 +666,11 @@ pub fn load_config(
     let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
     let stripped = strip_json_comments(raw);
     let config: DevContainerConfig = serde_json::from_str(&stripped)?;
+    if config.name.is_some() && config.container_name_override.is_some() {
+        eprintln!(
+            "Warning: both 'name' and 'containerName' are set; 'containerName' takes precedence for image/build configs and is ignored with dockerComposeFile"
+        );
+    }
     config.validate()?;
     Ok((config, config_path))
 }
