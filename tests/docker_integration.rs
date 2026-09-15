@@ -2259,3 +2259,79 @@ fn test_default_build_context_is_dockerfile_dir() {
     let _ = Command::new("docker").args(["rmi", "-f", &image]).output();
     cleanup(&ws);
 }
+
+#[test]
+fn test_user_env_probe_uses_login_shell() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "probe-shell",
+        r#"{"name": "int-probe-shell", "image": "bondar-int-probe-shell:1", "workspaceFolder": "/workspace", "remoteUser": "probeuser", "userEnvProbe": "loginShell"}"#,
+    );
+    // A fake login shell that prints a banner and exports a variable before
+    // running the probe command (the real shell would source rc files).
+    let dockerfile = r#"FROM ubuntu:22.04
+RUN printf '%s\n' '#!/bin/sh' 'for arg in "$@"; do last="$arg"; done' 'echo "banner=1"' 'export FAKE_PROBE_VAR=from-shell' 'exec /bin/sh -c "$last"' > /usr/local/bin/fakeshell \
+ && chmod +x /usr/local/bin/fakeshell \
+ && useradd -m -s /usr/local/bin/fakeshell probeuser
+"#;
+    std::fs::write(ws.join("Dockerfile"), dockerfile).unwrap();
+    let build = Command::new("docker")
+        .args(["build", "-t", "bondar-int-probe-shell:1"])
+        .arg(&ws)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "image build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&[
+        "up",
+        "--workspace-folder",
+        ws_str,
+        "--remove-existing-container",
+    ]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let var = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--",
+        "printenv",
+        "FAKE_PROBE_VAR",
+    ]);
+    assert_eq!(
+        String::from_utf8_lossy(&var.stdout).trim(),
+        "from-shell",
+        "the probe should run the user's login shell"
+    );
+    // Shell startup noise must not be parsed as environment variables
+    let noise = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--",
+        "printenv",
+        "banner",
+    ]);
+    assert!(
+        !noise.status.success(),
+        "shell banner output leaked into the probed environment"
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    let _ = Command::new("docker")
+        .args(["rmi", "-f", "bondar-int-probe-shell:1"])
+        .output();
+    cleanup(&ws);
+}
