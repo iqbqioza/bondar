@@ -359,6 +359,27 @@ impl DevContainerConfig {
                 }
             }
         }
+        // Docker rejects duplicate mount targets ("Duplicate mount point")
+        let workspace_target = self
+            .workspace_mount
+            .as_deref()
+            .and_then(mount_string_target)
+            .or_else(|| self.workspace_folder.clone());
+        let mut targets: Vec<String> = workspace_target.into_iter().collect();
+        for m in &self.mounts {
+            let target = match m {
+                MountValue::Object(o) => o.target.clone(),
+                MountValue::String(s) => mount_string_target(s),
+            };
+            if let Some(target) = target {
+                if targets.contains(&target) {
+                    return Err(BondarError::Config(format!(
+                        "duplicate mount target '{target}'"
+                    )));
+                }
+                targets.push(target);
+            }
+        }
         for cap in &self.cap_add {
             if cap.trim().is_empty() {
                 return Err(BondarError::Config(
@@ -581,6 +602,22 @@ pub fn default_workspace_folder(workspace_folder: &Path) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or("workspace");
     format!("/workspaces/{basename}")
+}
+
+/// Target of a Docker `--mount` string, when present.
+fn mount_string_target(spec: &str) -> Option<String> {
+    for part in spec.split(',') {
+        let part = part.trim();
+        for key in ["target=", "dst=", "destination="] {
+            if let Some(value) = part.strip_prefix(key) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 pub fn find_config_path(workspace_folder: &Path) -> Option<PathBuf> {
@@ -978,6 +1015,27 @@ mod tests {
         let abs: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "workspaceFolder": "/ws"}"#).unwrap();
         assert!(abs.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_duplicate_mount_targets() {
+        let workspace_collision: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "workspaceFolder": "/ws", "mounts": [{"type": "volume", "target": "/ws"}]}"#,
+        )
+        .unwrap();
+        assert!(workspace_collision.validate().is_err());
+
+        let duplicate: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": [{"type": "volume", "target": "/d"}, "type=bind,source=/a,target=/d"]}"#,
+        )
+        .unwrap();
+        assert!(duplicate.validate().is_err());
+
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "workspaceFolder": "/ws", "mounts": [{"type": "volume", "target": "/d"}, "type=bind,source=/a,dst=/e"]}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]
