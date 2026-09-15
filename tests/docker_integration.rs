@@ -1669,3 +1669,20 @@ fn test_workspace_mount_folder_mismatch_warning() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_stopcompose_without_compose_warns() {
+    let ws = make_workspace(
+        "stopcompose-image",
+        r#"{"name": "int-stopcompose-image", "image": "ubuntu:22.04", "shutdownAction": "stopCompose"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let out = bondar(&["build", "--workspace-folder", ws_str]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("requires dockerComposeFile"),
+        "expected a stopCompose warning: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}

@@ -489,8 +489,11 @@ impl DevContainerConfig {
                     "'shutdownAction' must be one of 'none', 'stopContainer', 'stopCompose', got '{action}'"
                 )));
             }
-            // Cross-mode validation: warn but allow alias; strict schema will catch
-            // mismatched values (e.g. stopCompose on non-compose) as schema error
+            if action == "stopCompose" && self.docker_compose_file.is_none() {
+                eprintln!(
+                    "Warning: shutdownAction 'stopCompose' requires dockerComposeFile; 'down' will remove the container"
+                );
+            }
         }
         for key in self.container_env.keys().chain(self.remote_env.keys()) {
             if key.trim().is_empty() {
