@@ -489,6 +489,12 @@ fn run_compose(
 ) -> Result<()> {
     crate::compose::check_compose_available()?;
 
+    if cfg.container_name_override.is_some() {
+        eprintln!(
+            "Warning: 'containerName' is ignored when using dockerComposeFile (compose names the containers)"
+        );
+    }
+
     if no_build && no_cache {
         eprintln!(
             "Warning: --no-build and --no-cache combined; build is skipped so --no-cache has no effect"
