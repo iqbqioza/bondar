@@ -1029,6 +1029,10 @@ fn install_in_container(
             if k == "installsAfter" {
                 continue;
             }
+            if k.trim().is_empty() {
+                eprintln!("  Warning: feature option with an empty name was ignored");
+                continue;
+            }
             if v.is_null() {
                 continue;
             }
