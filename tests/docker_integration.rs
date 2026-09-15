@@ -1925,3 +1925,32 @@ fn test_compose_up_removes_orphans() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_exec_relative_workdir_rejected() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "relworkdir",
+        r#"{"name": "int-relworkdir", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let out = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--workdir",
+        "relative",
+        "--",
+        "pwd",
+    ]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("absolute path"),
+        "expected an absolute-path error: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}

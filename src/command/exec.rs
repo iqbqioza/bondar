@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::config;
 use crate::docker;
-use crate::error::Result;
+use crate::error::{BondarError, Result};
 use crate::host;
 
 pub fn run(
@@ -19,10 +19,14 @@ pub fn run(
     {
         eprintln!("Warning: --user is empty; ignoring it");
     }
-    if let Some(w) = &workdir
-        && w.is_empty()
-    {
-        eprintln!("Warning: --workdir is empty; ignoring it");
+    if let Some(w) = &workdir {
+        if w.is_empty() {
+            eprintln!("Warning: --workdir is empty; ignoring it");
+        } else if !w.starts_with('/') {
+            return Err(BondarError::Config(
+                "--workdir must be an absolute path inside the container".to_string(),
+            ));
+        }
     }
 
     let ws = docker::get_workspace_folder(workspace_folder)?;
