@@ -1304,7 +1304,16 @@ impl<'a> FeatureInstaller<'a> {
     }
 
     fn install(&mut self, id: &str, opts: &serde_json::Value) -> Result<()> {
-        if self.installed.contains_key(id) {
+        if let Some(existing) = self.installed.get(id) {
+            // Same feature requested again (e.g. as a dependency) with other
+            // options: the spec treats those as different features, so make the
+            // ignored options visible instead of silently dropping them.
+            let incoming = effective_feature_opts(id, opts);
+            if existing != &incoming {
+                eprintln!(
+                    "Warning: feature '{id}' is already installed; its options {existing} take precedence over the later {incoming}"
+                );
+            }
             return Ok(());
         }
         if !self.visiting.insert(id.to_string()) {
