@@ -74,12 +74,16 @@ pub fn check_host_requirements(req: &serde_json::Value, _workspace_folder: &Path
                 if !has_gpu() {
                     eprintln!("Warning: hostRequirements.gpu object required but no GPU detected");
                 }
-                if let Some(cores) = map.get("cores")
-                    && cores.as_u64().is_none()
-                {
-                    eprintln!(
-                        "Warning: hostRequirements.gpu.cores must be a non-negative integer, got {cores}"
-                    );
+                if let Some(cores) = map.get("cores") {
+                    match cores.as_u64() {
+                        Some(0) => eprintln!(
+                            "Warning: hostRequirements.gpu.cores must be at least 1, got 0"
+                        ),
+                        Some(_) => {}
+                        None => eprintln!(
+                            "Warning: hostRequirements.gpu.cores must be a non-negative integer, got {cores}"
+                        ),
+                    }
                 }
                 if let Some(mem_str) = map.get("memory").and_then(|v| v.as_str())
                     && parse_size(mem_str).is_none()
