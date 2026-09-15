@@ -27,6 +27,7 @@ pub fn run(
 
     let ws = docker::get_workspace_folder(workspace_folder)?;
     let (mut cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+    crate::features::apply_cached_feature_container_properties(&mut cfg);
 
     if cfg.docker_compose_file.is_some() {
         apply_compose_image_metadata(&mut cfg, &cfg_path, &ws);

@@ -378,6 +378,29 @@ fn prefetch_one_feature_inner(
     Ok(())
 }
 
+/// Merge container properties from cached feature metadata (without fetching),
+/// so `${containerEnv:KEY}` references resolve to the values the feature set
+/// when the container was created.
+pub fn apply_cached_feature_container_properties(config: &mut crate::config::DevContainerConfig) {
+    let Some(mut ids) = config
+        .features
+        .as_ref()
+        .map(|features| features.keys().cloned().collect::<Vec<_>>())
+    else {
+        return;
+    };
+    ids.sort();
+    let mut props = FeatureContainerProperties::default();
+    for id in ids {
+        let dir = feature_cache_dir().join(sanitize_id(&id));
+        merge_feature_container_properties(
+            &mut props,
+            collect_feature_container_properties(&id, &dir),
+        );
+    }
+    apply_feature_container_properties(config, &props);
+}
+
 /// Merge feature-declared container properties into the configuration. User
 /// configuration wins for `containerEnv`; feature requirements can only enable
 /// `privileged`/`init` and append capabilities/security options.
@@ -1971,6 +1994,36 @@ mod tests {
         assert_eq!(hooks[0].1, serde_json::json!("echo a"));
         assert_eq!(hooks[1].0, "postCreateCommand");
         assert!(image_metadata_lifecycle_hooks("not json").is_empty());
+    }
+
+    #[test]
+    fn test_apply_cached_feature_container_properties() {
+        let id = "ghcr.io/test/cached-env";
+        let dir = feature_cache_dir().join(sanitize_id(id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("devcontainer-feature.json"),
+            r#"{"containerEnv":{"CACHED_ENV":"1"}}"#,
+        )
+        .unwrap();
+        let mut cfg = crate::config::DevContainerConfig {
+            features: Some(HashMap::from([(id.to_string(), serde_json::json!({}))])),
+            ..Default::default()
+        };
+        apply_cached_feature_container_properties(&mut cfg);
+        assert_eq!(cfg.container_env.get("CACHED_ENV").unwrap(), "1");
+        // Missing cache entries are ignored
+        let mut cfg2 = crate::config::DevContainerConfig {
+            features: Some(HashMap::from([(
+                "ghcr.io/test/no-cache".to_string(),
+                serde_json::json!({}),
+            )])),
+            ..Default::default()
+        };
+        apply_cached_feature_container_properties(&mut cfg2);
+        assert!(cfg2.container_env.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
