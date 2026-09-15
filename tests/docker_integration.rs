@@ -1995,3 +1995,26 @@ fn test_run_args_name_warns() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_gpu_cores_zero_warns() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "gpu-cores",
+        r#"{"name": "int-gpu-cores", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "hostRequirements": {"gpu": {"cores": 0}}, "userEnvProbe": "none"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(up.status.success());
+    assert!(
+        String::from_utf8_lossy(&up.stderr).contains("gpu.cores must be at least 1"),
+        "expected a gpu.cores warning: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
