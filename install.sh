@@ -72,7 +72,8 @@ download() { # url output_file
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL -H "User-Agent: bondar-installer" --proto '=https' --tlsv1.2 "$1" -o "$2"
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$2" --header="User-Agent: bondar-installer" "$1"
+        # --https-only matches curl's --proto '=https' restriction
+        wget -qO "$2" --https-only --header="User-Agent: bondar-installer" "$1"
     else
         echo "error: neither curl nor wget is available" >&2
         return 1
