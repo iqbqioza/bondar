@@ -596,6 +596,12 @@ pub fn create_and_start_container(
         .arg(format!("devcontainer.local_folder={workspace_folder_str}"));
     cmd.arg("--label")
         .arg(format!("devcontainer.config_file={config_file_str}"));
+    // Feature customizations must be attached at creation time because Docker
+    // labels cannot be added to an existing container.
+    if let Some(custom) = crate::features::feature_customizations_label(&config.features) {
+        cmd.arg("--label")
+            .arg(format!("devcontainer.feature_customizations={custom}"));
+    }
     let devcontainer_id = devcontainer_id_for(workspace_folder);
     cmd.arg("--label")
         .arg(format!("devcontainer.id={devcontainer_id}"));

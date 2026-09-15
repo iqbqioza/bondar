@@ -398,6 +398,14 @@ fn write_compose_override(
             yaml.push_str(&format!("      - \"{}\"\n", escape_yaml_value(s)));
         }
     }
+    if let Some(custom) = crate::features::feature_customizations_label(&config.features) {
+        wrote_any = true;
+        yaml.push_str("    labels:\n");
+        yaml.push_str(&format!(
+            "      devcontainer.feature_customizations: \"{}\"\n",
+            escape_yaml_value(&custom)
+        ));
+    }
 
     // Keep the service alive like the reference CLI: the compose entrypoint is
     // replaced with a wrapper that execs the original entrypoint/command (or
@@ -1040,6 +1048,36 @@ mod tests {
         let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         assert!(path.as_os_str().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_write_compose_override_feature_customizations_label() {
+        let id = "ghcr.io/bondar-test/fake-compose-customizations:1";
+        let cache = crate::features::feature_cache_dir_for(id);
+        let _ = std::fs::remove_dir_all(&cache);
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join("devcontainer-feature.json"),
+            r#"{"id":"fake-compose-customizations","customizations":{"vscode":{"extensions":["a.b"]}}}"#,
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join("bondar-ovr-test-customizations");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut features = HashMap::new();
+        features.insert(id.to_string(), serde_json::json!({}));
+        let cfg = DevContainerConfig {
+            service: Some("app".to_string()),
+            features: Some(features),
+            ..Default::default()
+        };
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("devcontainer.feature_customizations"));
+        assert!(content.contains("a.b"));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cache);
     }
 
     #[test]

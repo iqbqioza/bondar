@@ -157,34 +157,8 @@ pub fn run(
             cfg.container_user.as_deref(),
         )?;
 
-        // Store merged feature customizations as a container label
-        let merged_custom = crate::features::collect_feature_customizations(&installed, &order);
-        if !merged_custom.as_object().is_none_or(|m| m.is_empty()) {
-            let json_str = serde_json::to_string(&merged_custom).unwrap_or_default();
-            let label_arg = format!("devcontainer.feature_customizations={json_str}");
-            // `docker update --label-add` and `docker label` are not supported
-            // by current Docker releases; both attempts are best-effort with
-            // suppressed stderr so a missing feature is not hidden by noise.
-            let mut cmd = std::process::Command::new("docker");
-            cmd.args(["update", "--label-add", &label_arg, &container_name]);
-            cmd.stdout(std::process::Stdio::null());
-            cmd.stderr(std::process::Stdio::null());
-            let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
-            let ok = ok || {
-                let mut cmd = std::process::Command::new("docker");
-                cmd.args(["label", &container_name, &label_arg]);
-                cmd.stdout(std::process::Stdio::null());
-                cmd.stderr(std::process::Stdio::null());
-                cmd.status().map(|s| s.success()).unwrap_or(false)
-            };
-            if ok {
-                println!("Merged feature customizations stored on container label");
-            } else {
-                eprintln!(
-                    "Warning: could not store the feature customizations label on the container (this Docker version does not support adding labels after creation)"
-                );
-            }
-        }
+        // Customizations are attached as a container label at creation time
+        // (see `create_and_start_container` / the compose override).
         (installed, order)
     } else {
         (
