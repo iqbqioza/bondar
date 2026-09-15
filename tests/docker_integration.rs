@@ -168,7 +168,7 @@ fn test_compose_roundtrip() {
     .unwrap();
     std::fs::write(
         ws.join(".devcontainer/devcontainer.json"),
-        r#"{"name": "int-compose", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "remoteEnv": {"WS": "${containerWorkspaceFolder}"}}"#,
+        r#"{"name": "int-compose", "containerName": "int-compose-custom", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "remoteEnv": {"WS": "${containerWorkspaceFolder}"}}"#,
     )
     .unwrap();
     let ws_str = ws.to_str().unwrap();
@@ -177,6 +177,11 @@ fn test_compose_roundtrip() {
     assert!(
         up.status.success(),
         "compose up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&up.stderr).contains("'containerName' is ignored"),
+        "expected a containerName warning: {}",
         String::from_utf8_lossy(&up.stderr)
     );
 
