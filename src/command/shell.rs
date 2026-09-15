@@ -9,6 +9,7 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
 
     let ws = docker::get_workspace_folder(workspace_folder)?;
     let (mut cfg, cfg_path) = config::load_config(&ws, config_path.as_deref())?;
+    crate::features::apply_cached_feature_container_properties(&mut cfg);
 
     if cfg.docker_compose_file.is_some() {
         crate::command::exec::apply_compose_image_metadata(&mut cfg, &cfg_path, &ws);
