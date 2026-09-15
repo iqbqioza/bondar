@@ -354,6 +354,19 @@ impl DevContainerConfig {
                             "'mounts' entry '{s}' must specify a target (target=, dst= or destination=)"
                         )));
                     }
+                    let empty_source = s.split(',').any(|part| {
+                        let part = part.trim();
+                        ["source=", "src="].iter().any(|key| {
+                            part.strip_prefix(key)
+                                .map(|value| value.trim().is_empty())
+                                .unwrap_or(false)
+                        })
+                    });
+                    if empty_source {
+                        return Err(BondarError::Config(format!(
+                            "'mounts' entry '{s}' must not have an empty source"
+                        )));
+                    }
                 }
                 MountValue::Object(o) => {
                     if let Some(source) = &o.source
@@ -1133,6 +1146,21 @@ mod tests {
         // Anonymous volumes have no source and stay valid
         let ok: DevContainerConfig = serde_json::from_str(
             r#"{"image": "ubuntu", "mounts": [{"type": "volume", "target": "/x"}]}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_string_mount_empty_source() {
+        let bad: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": ["type=bind,source=,target=/x"]}"#,
+        )
+        .unwrap();
+        assert!(bad.validate().is_err());
+
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "mounts": ["type=volume,src=myvol,target=/x"]}"#,
         )
         .unwrap();
         assert!(ok.validate().is_ok());
