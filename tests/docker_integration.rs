@@ -1506,21 +1506,27 @@ fn test_compose_stop_compose_without_primary_container() {
         "compose down failed: {}",
         String::from_utf8_lossy(&down.stderr)
     );
-    let db = Command::new("docker")
-        .args([
-            "ps",
-            "-q",
-            "--filter",
-            &format!("label=com.docker.compose.project={project}"),
-            "--filter",
-            "label=com.docker.compose.service=db",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        db.stdout.is_empty(),
-        "remaining compose service was not stopped"
-    );
+    // Poll briefly so slow CI does not flake on stopped-state propagation
+    let mut db_stopped = false;
+    for _ in 0..50 {
+        let db = Command::new("docker")
+            .args([
+                "ps",
+                "-q",
+                "--filter",
+                &format!("label=com.docker.compose.project={project}"),
+                "--filter",
+                "label=com.docker.compose.service=db",
+            ])
+            .output()
+            .unwrap();
+        if db.stdout.is_empty() {
+            db_stopped = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(db_stopped, "remaining compose service was not stopped");
 
     // Cleanup the stopped project
     let compose_file = ws.join("docker-compose.yml");
