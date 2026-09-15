@@ -2359,10 +2359,13 @@ fn test_compose_container_user() {
         "up failed: {}",
         String::from_utf8_lossy(&up.stderr)
     );
+    let project = project_name_for(&ws);
     let cid = Command::new("docker")
         .args([
             "ps",
             "-q",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
             "--filter",
             "label=com.docker.compose.service=app",
         ])
