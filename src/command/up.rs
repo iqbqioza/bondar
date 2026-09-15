@@ -506,29 +506,35 @@ fn run_compose(
     } else {
         Vec::new()
     };
-    let cfg = &merged_cfg;
+    let creating = !was_existing || remove_existing;
 
-    if let Some(cmd) = &cfg.initialize_command {
+    if let Some(cmd) = &merged_cfg.initialize_command {
         println!("Running initializeCommand on host...");
-        let host_target = cfg
+        let host_target = merged_cfg
             .workspace_folder
             .clone()
             .unwrap_or_else(|| "/".to_string());
         lifecycle::execute_host_lifecycle_with_target(cmd, ws, &host_target)?;
     }
 
-    if no_cache && !no_build {
-        // Force rebuild with no cache for compose
+    // Build services before resolving image metadata (and before the override
+    // is generated) so build-only images exist for inspection.
+    if !no_build && creating {
         let mut build_cmd = std::process::Command::new("docker");
         build_cmd.arg("compose");
         build_cmd
             .arg("--project-name")
             .arg(docker::compose_project_name(ws));
-        for arg in crate::compose::compose_files_args_for_build(cfg, cfg_path, ws)? {
+        for arg in crate::compose::compose_files_args_for_build(&merged_cfg, cfg_path, ws)? {
             build_cmd.arg(arg);
         }
-        build_cmd.arg("build").arg("--no-cache");
+        build_cmd.arg("build");
+        if no_cache {
+            build_cmd.arg("--no-cache");
+        }
         build_cmd.current_dir(ws);
+        build_cmd.stdout(std::process::Stdio::inherit());
+        build_cmd.stderr(std::process::Stdio::inherit());
         let status = build_cmd.status().map_err(|e| {
             crate::error::BondarError::Docker(format!("Failed to run compose build: {e}"))
         })?;
@@ -541,9 +547,22 @@ fn run_compose(
         println!("Skipping compose build (--no-build)");
     }
 
+    // Merge the primary service image's devcontainer.metadata (users, env,
+    // mounts, ...) before the compose override is generated.
+    let mut image_metadata = if creating {
+        crate::compose::service_image(&merged_cfg, cfg_path, ws)
+            .and_then(|image| crate::docker::image_metadata_label(&image, true))
+    } else {
+        None
+    };
+    if let Some(raw) = &image_metadata {
+        crate::features::apply_image_metadata(&mut merged_cfg, raw);
+    }
+    let cfg = &merged_cfg;
+
     crate::compose::compose_up(cfg, cfg_path, ws, remove_existing, no_build)?;
 
-    let newly_created = !was_existing || remove_existing;
+    let newly_created = creating;
 
     let service = cfg.service.clone().unwrap_or_else(|| "service".to_string());
     // When the container name cannot be resolved, docker exec based steps
@@ -561,10 +580,14 @@ fn run_compose(
         }
     };
 
-    // Merge the service image's devcontainer.metadata (users, env, mounts, ...)
-    let image_metadata = crate::docker::container_metadata_label(&container_name);
-    if let Some(raw) = &image_metadata {
-        crate::features::apply_image_metadata(&mut merged_cfg, raw);
+    // Fallback when the image could not be resolved before the override: read
+    // the metadata from the created container (container properties cannot be
+    // applied anymore, but users and lifecycle hooks still are).
+    if image_metadata.is_none()
+        && let Some(raw) = crate::docker::container_metadata_label(&container_name)
+    {
+        crate::features::apply_image_metadata(&mut merged_cfg, &raw);
+        image_metadata = Some(raw);
     }
     let cfg = &merged_cfg;
 

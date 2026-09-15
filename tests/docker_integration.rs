@@ -1337,3 +1337,76 @@ fn test_compose_down_removes_orphans() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_compose_build_metadata_container_properties() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-compose-meta");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join("Dockerfile"),
+        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"containerEnv\":{\"META_ENV\":\"from-meta\"},\"privileged\":true}]'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    build:\n      context: .\n      dockerfile: Dockerfile\n    command: sh -c 'while sleep 1000; do :; done'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-compose-meta", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "compose up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let id = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "-q",
+            "--filter",
+            &format!("label=com.docker.compose.project={}", project_name_for(&ws)),
+        ])
+        .output()
+        .unwrap();
+    let id = String::from_utf8_lossy(&id.stdout).trim().to_string();
+    assert!(!id.is_empty(), "service container not found");
+
+    let privileged = Command::new("docker")
+        .args(["inspect", "-f", "{{.HostConfig.Privileged}}", &id])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&privileged.stdout).trim(),
+        "true",
+        "metadata privileged not applied to the compose container"
+    );
+
+    let env = Command::new("docker")
+        .args(["exec", &id, "sh", "-c", "echo META_ENV=$META_ENV"])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&env.stdout).contains("META_ENV=from-meta"),
+        "metadata containerEnv not applied to the compose container"
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    let _ = Command::new("docker")
+        .args(["rmi", "-f", &format!("{}-app", project_name_for(&ws))])
+        .output();
+    cleanup(&ws);
+}

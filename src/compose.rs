@@ -489,6 +489,36 @@ fn escape_yaml_key(input: &str) -> String {
     }
 }
 
+/// Effective image name for the primary service (`docker compose config
+/// --images`), including compose's default name for build-only services.
+pub fn service_image(
+    config: &DevContainerConfig,
+    config_path: &Path,
+    workspace_folder: &Path,
+) -> Option<String> {
+    let service = config.service.as_deref()?;
+    let mut cmd = Command::new("docker");
+    cmd.arg("compose");
+    cmd.arg("--project-name")
+        .arg(crate::docker::compose_project_name(workspace_folder));
+    for arg in compose_files_args_for_build(config, config_path, workspace_folder).ok()? {
+        cmd.arg(arg);
+    }
+    cmd.arg("config").arg("--images").arg(service);
+    cmd.current_dir(workspace_folder);
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let image = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if image.is_empty() { None } else { Some(image) }
+}
+
 pub fn compose_up(
     config: &DevContainerConfig,
     config_path: &Path,
