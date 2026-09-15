@@ -156,11 +156,29 @@ pub fn image_metadata_lifecycle_hooks(raw: &str) -> Vec<(&'static str, serde_jso
     hooks
 }
 
+/// `entrypoint` scripts declared in metadata (unsupported by bondar).
+pub fn declared_entrypoints(raw: &str) -> Vec<String> {
+    let mut entrypoints = Vec::new();
+    for entry in metadata_entries(raw) {
+        if let Some(value) = entry.get("entrypoint").and_then(|v| v.as_str())
+            && !value.is_empty()
+        {
+            entrypoints.push(value.to_string());
+        }
+    }
+    entrypoints
+}
+
 /// Merge the `devcontainer.metadata` image label into the configuration:
 /// `remoteUser`/`containerUser`/`userEnvProbe`/`overrideCommand` (when unset)
 /// and container properties (`containerEnv`, `mounts`, `privileged`, `init`,
 /// `capAdd`, `securityOpt`) accumulate with user values taking precedence.
 pub fn apply_image_metadata(config: &mut crate::config::DevContainerConfig, raw: &str) {
+    for entrypoint in declared_entrypoints(raw) {
+        eprintln!(
+            "Warning: image metadata declares entrypoint '{entrypoint}'; bondar does not apply it automatically - run the setup from postStartCommand or the compose file"
+        );
+    }
     let entries = metadata_entries(raw);
     let mut props = FeatureContainerProperties::default();
     for entry in &entries {
@@ -1231,15 +1249,22 @@ fn install_fetched_feature(
     remote_user: Option<&str>,
     container_user: Option<&str>,
 ) -> Result<()> {
-    if let Some(meta) = read_feature_metadata(dest_dir)
-        && let Some(after) = meta.get("installsAfter").and_then(|v| v.as_array())
-    {
-        let deps: Vec<String> = after
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-        if !deps.is_empty() {
-            println!("  Feature declares installsAfter: {deps:?}");
+    if let Some(meta) = read_feature_metadata(dest_dir) {
+        if let Some(entrypoint) = meta.get("entrypoint").and_then(|v| v.as_str())
+            && !entrypoint.is_empty()
+        {
+            eprintln!(
+                "  Warning: feature declares entrypoint '{entrypoint}'; bondar does not apply it automatically"
+            );
+        }
+        if let Some(after) = meta.get("installsAfter").and_then(|v| v.as_array()) {
+            let deps: Vec<String> = after
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            if !deps.is_empty() {
+                println!("  Feature declares installsAfter: {deps:?}");
+            }
         }
     }
 
@@ -1796,6 +1821,16 @@ mod tests {
     fn test_sort_by_installs_after_empty() {
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
         assert!(sort_by_installs_after(&empty).is_empty());
+    }
+
+    #[test]
+    fn test_declared_entrypoints() {
+        assert_eq!(
+            declared_entrypoints(r#"[{"id":"f"},{"entrypoint":"/usr/local/share/init.sh"}]"#),
+            vec!["/usr/local/share/init.sh".to_string()]
+        );
+        assert!(declared_entrypoints(r#"{"entrypoint":""}"#).is_empty());
+        assert!(declared_entrypoints("not json").is_empty());
     }
 
     #[test]
