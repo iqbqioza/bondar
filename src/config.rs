@@ -288,12 +288,18 @@ impl DevContainerConfig {
                 "'workspaceFolder' must be specified when using 'workspaceMount'".to_string(),
             ));
         }
-        if let Some(m) = &self.workspace_mount
-            && m.trim().is_empty()
-        {
-            return Err(BondarError::Config(
-                "'workspaceMount' must not be empty".to_string(),
-            ));
+        if let Some(m) = &self.workspace_mount {
+            if m.trim().is_empty() {
+                return Err(BondarError::Config(
+                    "'workspaceMount' must not be empty".to_string(),
+                ));
+            }
+            if mount_string_target(m).is_none() {
+                return Err(BondarError::Config(
+                    "'workspaceMount' must specify a target (target=, dst= or destination=)"
+                        .to_string(),
+                ));
+            }
         }
         if let Some(f) = &self.workspace_folder
             && f.trim().is_empty()
@@ -1127,6 +1133,21 @@ mod tests {
         let cfg: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "name": "   "}"#).unwrap();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_workspace_mount_requires_target() {
+        let bad: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "workspaceFolder": "/x", "workspaceMount": "type=bind,source=/a"}"#,
+        )
+        .unwrap();
+        assert!(bad.validate().is_err());
+
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "workspaceFolder": "/x", "workspaceMount": "type=bind,source=/a,target=/x"}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]
