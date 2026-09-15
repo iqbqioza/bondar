@@ -1509,7 +1509,23 @@ fn test_container_exiting_immediately_warns() {
     }
     let ws = make_workspace(
         "exits",
-        r#"{"name": "int-exits", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "overrideCommand": false, "userEnvProbe": "none"}"#,
+        r#"{"name": "int-exits", "image": "bondar-int-exits:1", "workspaceFolder": "/workspace", "overrideCommand": false, "userEnvProbe": "none"}"#,
+    );
+    // An entrypoint that exits immediately makes the check deterministic
+    std::fs::write(
+        ws.join("Dockerfile"),
+        "FROM ubuntu:22.04\nENTRYPOINT [\"/bin/false\"]\n",
+    )
+    .unwrap();
+    let build = Command::new("docker")
+        .args(["build", "-t", "bondar-int-exits:1"])
+        .arg(&ws)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "image build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
     );
     let ws_str = ws.to_str().unwrap();
 
@@ -1532,5 +1548,8 @@ fn test_container_exiting_immediately_warns() {
 
     let down = bondar(&["down", "--workspace-folder", ws_str]);
     assert!(down.status.success());
+    let _ = Command::new("docker")
+        .args(["rmi", "-f", "bondar-int-exits:1"])
+        .output();
     cleanup(&ws);
 }
