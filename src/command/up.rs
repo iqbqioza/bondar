@@ -116,8 +116,19 @@ pub fn run(
         println!("Skipping image build (--no-build)");
     }
 
-    // Merge the image's devcontainer.metadata (users, env, mounts, ...)
-    let image_metadata = docker::image_metadata_label(&image_name, true);
+    // A fresh container exists when there was none before, or when
+    // --remove-existing-container forced a recreate.
+    let newly_created = !was_existing || remove_existing;
+
+    // Merge the image's devcontainer.metadata (users, env, mounts, ...).
+    // When the container already exists, read the metadata from its image
+    // without pulling (the image may have been retagged or removed locally).
+    let image_metadata = if newly_created {
+        // With --no-build a missing image will fail in `docker run` anyway
+        docker::image_metadata_label(&image_name, !no_build)
+    } else {
+        docker::container_metadata_label(&container_name)
+    };
     if let Some(raw) = &image_metadata {
         crate::features::apply_image_metadata(&mut cfg, raw);
     }
@@ -130,10 +141,6 @@ pub fn run(
         &image_name,
         remove_existing,
     )?;
-
-    // A fresh container exists when there was none before, or when
-    // --remove-existing-container forced a recreate.
-    let newly_created = !was_existing || remove_existing;
 
     host::handle_update_remote_user_uid(&cfg, &container_name, &ws)?;
 
