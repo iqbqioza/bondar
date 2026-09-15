@@ -1756,3 +1756,32 @@ fn test_default_user_env_probe() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_duplicate_forward_ports_deduplicated() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "dup-ports",
+        r#"{"name": "int-dup-ports", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "forwardPorts": [18081, 18081], "userEnvProbe": "none"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up with duplicate ports failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&up.stderr).contains("skipping the duplicate"),
+        "expected a duplicate-port warning: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
