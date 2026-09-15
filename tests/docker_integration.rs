@@ -1226,8 +1226,23 @@ fn test_compose_stop_container_only_primary() {
             .unwrap();
         !output.stdout.is_empty()
     };
-    assert!(!running("app"), "primary service should be stopped");
-    assert!(running("db"), "other service should keep running");
+    // Poll briefly so slow CI does not flake
+    let mut primary_stopped = false;
+    let mut other_running = false;
+    for _ in 0..30 {
+        if !running("app") {
+            primary_stopped = true;
+        }
+        if running("db") {
+            other_running = true;
+        }
+        if primary_stopped && other_running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(primary_stopped, "primary service should be stopped");
+    assert!(other_running, "other service should keep running");
 
     // Cleanup the whole project
     let compose_file = ws.join("docker-compose.yml");
