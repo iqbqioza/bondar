@@ -495,6 +495,27 @@ fn get_host_uid() -> Option<u32> {
     None
 }
 
+/// Container path that owns the workspace after UID/GID sync: the
+/// `workspaceMount` target when configured, otherwise the workspace folder
+/// (compose defaults to "/" and is skipped by the caller).
+pub(crate) fn workspace_chown_target(
+    config: &crate::config::DevContainerConfig,
+    workspace_folder: &Path,
+) -> String {
+    if config.docker_compose_file.is_some() {
+        return config
+            .workspace_folder
+            .clone()
+            .unwrap_or_else(|| "/".to_string());
+    }
+    config
+        .workspace_mount
+        .as_deref()
+        .and_then(crate::config::mount_string_target)
+        .or_else(|| config.workspace_folder.clone())
+        .unwrap_or_else(|| crate::config::default_workspace_folder(workspace_folder))
+}
+
 /// Chown the workspace directory to the given user, guarding against "/".
 fn chown_workspace(
     config: &crate::config::DevContainerConfig,
@@ -502,16 +523,7 @@ fn chown_workspace(
     user: &str,
     workspace_folder: &Path,
 ) {
-    // For compose, the default workspace folder is "/" (spec); chown of "/"
-    // is skipped below, so only chown when workspaceFolder is set explicitly.
-    let chown_target = if config.docker_compose_file.is_some() {
-        config
-            .workspace_folder
-            .clone()
-            .unwrap_or_else(|| "/".to_string())
-    } else {
-        config.workspace_folder_or_default(workspace_folder)
-    };
+    let chown_target = workspace_chown_target(config, workspace_folder);
     if chown_target == "/" {
         eprintln!(
             "Warning: skipping chown of '/' (would alter container-wide ownership); set workspaceFolder to a specific directory"
@@ -598,6 +610,49 @@ mod tests {
         assert!(is_known_probe("loginInteractiveShell"));
         assert!(!is_known_probe("bogus"));
         assert!(!is_known_probe(""));
+    }
+
+    #[test]
+    fn test_workspace_chown_target() {
+        use std::path::Path;
+        // Compose defaults to "/"
+        let compose = crate::config::DevContainerConfig {
+            docker_compose_file: Some(crate::config::ComposeFileValue::Single("c.yml".into())),
+            service: Some("app".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            workspace_chown_target(&compose, Path::new("/tmp/proj")),
+            "/"
+        );
+
+        // Image config without workspaceFolder
+        let image = crate::config::DevContainerConfig::default();
+        assert_eq!(
+            workspace_chown_target(&image, Path::new("/tmp/proj")),
+            "/workspaces/proj"
+        );
+
+        // workspaceMount target wins over workspaceFolder
+        let mount = crate::config::DevContainerConfig {
+            workspace_folder: Some("/ws".into()),
+            workspace_mount: Some("type=bind,source=/a,dst=/other".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            workspace_chown_target(&mount, Path::new("/tmp/proj")),
+            "/other"
+        );
+
+        // Explicit workspaceFolder is used when there is no workspaceMount
+        let explicit = crate::config::DevContainerConfig {
+            workspace_folder: Some("/custom".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            workspace_chown_target(&explicit, Path::new("/tmp/proj")),
+            "/custom"
+        );
     }
 
     #[test]
