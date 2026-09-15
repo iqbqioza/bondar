@@ -272,7 +272,8 @@ Note: the devcontainer spec defaults `waitFor` to `updateContentCommand`. bondar
 - `dependsOn` declared in feature metadata installs the dependencies (with the options given there) before the feature, recursively. Circular dependencies are warned and skipped.
 - Container properties declared by features (`containerEnv`, `mounts`, `privileged`, `init`, `capAdd`, `securityOpt`) are merged into the container configuration before creation (for image/Dockerfile configs and through the compose override). User `containerEnv` values win over feature values.
 - Deprecated features (`"deprecated": true`) are warned about.
-- `entrypoint` declared by a feature is not applied; bondar does not modify the container entrypoint. Run the required setup from `postStartCommand` or from the compose file instead.
+- `entrypoint` declared by a feature is not prepended to the keep-alive command. When `overrideCommand` is true (the default for `image`/`build` configurations), bondar starts the container with `--entrypoint /bin/sh` and an idle command, like the reference CLI; images with their own `ENTRYPOINT` therefore still start. Run feature-declared setup from `postStartCommand` or from the compose file instead.
+- For compose, the generated override wraps the service entrypoint with the same keep-alive script and execs the service's original entrypoint/command (resolved via `docker compose config`), so services without a long-running command stay up. When the project cannot be resolved by compose, the service is left untouched.
 - Features are installed only when the container is created, not on restart.
 - Lifecycle commands declared in feature metadata (`onCreateCommand` ... `postAttachCommand`) run before the user's corresponding lifecycle commands.
 - `customizations` declared by features are merged (objects merged, arrays unioned) and stored as a container label.
