@@ -866,9 +866,14 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
         // Feature images typically carry /install.sh at the root; copy only
         // that file instead of the whole root filesystem (which may include
         // mount points that docker cp cannot handle).
+        // These `docker cp` calls are expected to fail for feature artifacts
+        // (their custom layers are not in the container rootfs), so keep the
+        // noisy error output out of the user's terminal.
         let mut extracted = created
             && std::process::Command::new("docker")
                 .args(["cp", &format!("{tmp_name}:/install.sh"), dest_str])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
@@ -910,12 +915,16 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
         if !extracted && created {
             extracted = std::process::Command::new("docker")
                 .args(["cp", &format!("{tmp_name}:/"), dest_str])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
         }
         let _ = std::process::Command::new("docker")
             .args(["rm", "-f", &tmp_name])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
         if extracted && dest_dir.join("install.sh").exists() {
             println!("  Extracted feature files from image");
