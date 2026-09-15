@@ -1092,7 +1092,7 @@ fn test_image_metadata_remote_user() {
     );
     std::fs::write(
         ws.join("Dockerfile"),
-        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"remoteUser\":\"vscode\",\"containerEnv\":{\"META_ENV\":\"1\"},\"privileged\":true,\"postCreateCommand\":\"echo meta-hook > /tmp/meta-hook.txt\"}]'\n",
+        "FROM ubuntu:22.04\nLABEL devcontainer.metadata='[{\"remoteUser\":\"vscode\",\"containerEnv\":{\"META_ENV\":\"1\"},\"privileged\":true,\"runArgs\":[\"--hostname\",\"meta-host\"],\"postCreateCommand\":\"echo meta-hook > /tmp/meta-hook.txt\"}]'\n",
     )
     .unwrap();
     let build = Command::new("docker")
@@ -1155,6 +1155,22 @@ fn test_image_metadata_remote_user() {
         hook.status.success() && String::from_utf8_lossy(&hook.stdout).contains("meta-hook"),
         "postCreateCommand from image metadata not executed: {}",
         String::from_utf8_lossy(&hook.stderr)
+    );
+
+    // runArgs from the metadata label are applied at creation
+    let hostname = Command::new("docker")
+        .args([
+            "inspect",
+            "-f",
+            "{{.Config.Hostname}}",
+            "bondar-int-image-meta",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&hostname.stdout).trim(),
+        "meta-host",
+        "runArgs from image metadata not applied"
     );
 
     let privileged = Command::new("docker")

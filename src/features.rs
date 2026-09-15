@@ -238,6 +238,16 @@ pub fn apply_image_metadata(config: &mut crate::config::DevContainerConfig, raw:
         {
             config.wait_for = Some(wait.to_string());
         }
+        if let Some(run_args) = entry.get("runArgs").and_then(|v| v.as_array()) {
+            for arg in run_args {
+                if let Some(arg) = arg.as_str()
+                    && !arg.is_empty()
+                    && !config.run_args.iter().any(|existing| existing == arg)
+                {
+                    config.run_args.push(arg.to_string());
+                }
+            }
+        }
         if let Some(remote_env) = entry.get("remoteEnv").and_then(|v| v.as_object()) {
             for (key, value) in remote_env {
                 if config.remote_env.contains_key(key) {
@@ -2055,7 +2065,7 @@ mod tests {
         };
         apply_image_metadata(
             &mut cfg,
-            r#"[{"remoteUser":"vscode"},{"containerEnv":{"FROM_IMAGE":"1","SHARED":"lost"},"mounts":[{"type":"volume","source":"v","target":"/v"}],"privileged":true,"capAdd":["SYS_PTRACE"],"userEnvProbe":"loginShell","updateRemoteUserUID":false,"waitFor":"postCreateCommand","remoteEnv":{"META_R":"1","UNSET_R":null}}]"#,
+            r#"[{"remoteUser":"vscode"},{"containerEnv":{"FROM_IMAGE":"1","SHARED":"lost"},"mounts":[{"type":"volume","source":"v","target":"/v"}],"privileged":true,"capAdd":["SYS_PTRACE"],"userEnvProbe":"loginShell","updateRemoteUserUID":false,"waitFor":"postCreateCommand","runArgs":["--add-host=meta:127.0.0.1","--add-host=meta:127.0.0.1"],"remoteEnv":{"META_R":"1","UNSET_R":null}}]"#,
         );
         assert_eq!(cfg.remote_user.as_deref(), Some("vscode"));
         assert_eq!(cfg.container_env.get("SHARED").unwrap(), "user");
@@ -2070,6 +2080,7 @@ mod tests {
             cfg.remote_env.get("META_R").and_then(|v| v.clone()),
             Some("1".to_string())
         );
+        assert_eq!(cfg.run_args, vec!["--add-host=meta:127.0.0.1".to_string()]);
         assert!(cfg.remote_env.contains_key("UNSET_R"));
         assert_eq!(cfg.remote_env.get("UNSET_R").cloned().flatten(), None);
         // User values are not overridden by metadata
