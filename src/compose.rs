@@ -115,6 +115,44 @@ fn mount_string_to_compose_volume(mount: &str) -> Option<String> {
     Some(vol)
 }
 
+/// Entrypoint and command declared by the compose service, resolved with
+/// `docker compose config --format json`. Returns `None` when compose cannot
+/// resolve the project (e.g. older compose without JSON output), in which case
+/// the service is left untouched.
+fn compose_service_entrypoint_command(
+    config: &DevContainerConfig,
+    config_path: &Path,
+    workspace_folder: &Path,
+) -> Option<(Vec<String>, Vec<String>)> {
+    let service = config.service.as_deref()?;
+    let mut cmd = Command::new("docker");
+    cmd.arg("compose");
+    cmd.arg("--project-name")
+        .arg(crate::docker::compose_project_name(workspace_folder));
+    for arg in compose_files_args_for_build(config, config_path, workspace_folder).ok()? {
+        cmd.arg(arg);
+    }
+    cmd.arg("config").arg("--format").arg("json");
+    cmd.current_dir(workspace_folder);
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let svc = value.get("services")?.get(service)?;
+    let to_vec = |v: Option<&serde_json::Value>| -> Vec<String> {
+        match v {
+            Some(serde_json::Value::Array(items)) => items
+                .iter()
+                .filter_map(|i| i.as_str().map(String::from))
+                .collect(),
+            Some(serde_json::Value::String(s)) => s.split_whitespace().map(String::from).collect(),
+            _ => Vec::new(),
+        }
+    };
+    Some((to_vec(svc.get("entrypoint")), to_vec(svc.get("command"))))
+}
+
 /// The named volume referenced by a compose short-syntax volume entry, if any.
 /// Paths (absolute, relative, `~`) and anonymous volumes return `None`.
 fn compose_named_volume(vol: &str) -> Option<&str> {
@@ -132,7 +170,11 @@ fn compose_named_volume(vol: &str) -> Option<&str> {
     Some(source)
 }
 
-fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) -> Result<PathBuf> {
+fn write_compose_override(
+    config: &DevContainerConfig,
+    config_path: &Path,
+    workspace_folder: &Path,
+) -> Result<PathBuf> {
     let service = config
         .service
         .as_deref()
@@ -357,6 +399,34 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         }
     }
 
+    // Keep the service alive like the reference CLI: the compose entrypoint is
+    // replaced with a wrapper that execs the original entrypoint/command (or
+    // just idles when the service has neither). Without this, services whose
+    // command exits immediately would stop right after `compose up`.
+    if let Some((service_entrypoint, service_command)) =
+        compose_service_entrypoint_command(config, config_path, workspace_folder)
+    {
+        let override_command = config.override_command.unwrap_or(false);
+        let mut entrypoint: Vec<String> = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "echo Container started\ntrap \"exit 0\" 15\nexec \"$@\"\nwhile sleep 1 & wait $!; do :; done"
+                .to_string(),
+            "-".to_string(),
+        ];
+        if !override_command {
+            entrypoint.extend(service_entrypoint);
+            entrypoint.extend(service_command);
+        }
+        wrote_any = true;
+        let items: Vec<String> = entrypoint
+            .iter()
+            .map(|s| format!("\"{}\"", escape_yaml_value(s)))
+            .collect();
+        yaml.push_str(&format!("    entrypoint: [{}]\n", items.join(", ")));
+        yaml.push_str("    command: []\n");
+    }
+
     if !named_volumes.is_empty() {
         wrote_any = true;
         named_volumes.sort();
@@ -451,7 +521,7 @@ fn compose_base_command(
     for arg in compose_files_args(config, config_path, workspace_folder)? {
         cmd.arg(arg);
     }
-    let override_path = write_compose_override(config, workspace_folder)?;
+    let override_path = write_compose_override(config, config_path, workspace_folder)?;
     if !override_path.as_os_str().is_empty() {
         cmd.arg("-f").arg(&override_path);
     }
@@ -967,7 +1037,7 @@ mod tests {
             })],
             ..Default::default()
         };
-        let path = write_compose_override(&cfg, &dir).unwrap();
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         assert!(path.as_os_str().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1000,7 +1070,7 @@ mod tests {
             })],
             ..Default::default()
         };
-        let path = write_compose_override(&cfg, &dir).unwrap();
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         assert!(!path.as_os_str().is_empty());
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("- \"0.0.0.0:8080:8080\""));
@@ -1025,7 +1095,7 @@ mod tests {
             )])),
             ..Default::default()
         };
-        let path = write_compose_override(&cfg, &dir).unwrap();
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("SEC: \"sv\""));
         unsafe {
@@ -1048,7 +1118,7 @@ mod tests {
             forward_ports: vec![crate::config::ForwardPort::Number(8080)],
             ..Default::default()
         };
-        let path = write_compose_override(&cfg, &dir).unwrap();
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         assert!(!path.as_os_str().is_empty());
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("  app:"));
@@ -1071,7 +1141,7 @@ mod tests {
             security_opt: vec!["seccomp=unconfined".to_string()],
             ..Default::default()
         };
-        let path = write_compose_override(&cfg, &dir).unwrap();
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("privileged: true"));
         assert!(content.contains("init: true"));
@@ -1120,7 +1190,7 @@ mod tests {
             })],
             ..Default::default()
         };
-        let path = write_compose_override(&cfg, &dir).unwrap();
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("- \"featvol:/data\""));
         assert!(content.contains("volumes:\n  featvol: {}"));
@@ -1137,7 +1207,7 @@ mod tests {
             service: Some("app".to_string()),
             ..Default::default()
         };
-        let path = write_compose_override(&cfg, &dir).unwrap();
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         assert!(path.as_os_str().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1157,8 +1227,10 @@ mod tests {
             container_env: HashMap::from([("A".to_string(), "1".to_string())]),
             ..Default::default()
         };
-        let path_a = write_compose_override(&cfg, &dir_a).unwrap();
-        let path_b = write_compose_override(&cfg, &dir_b).unwrap();
+        let path_a =
+            write_compose_override(&cfg, &dir_a.join("devcontainer.json"), &dir_a).unwrap();
+        let path_b =
+            write_compose_override(&cfg, &dir_b.join("devcontainer.json"), &dir_b).unwrap();
         // Same basename but different paths must not share the override file
         assert_ne!(path_a, path_b);
         let _ = std::fs::remove_file(&path_a);
@@ -1180,7 +1252,7 @@ mod tests {
                 container_env: HashMap::from([("SEC".to_string(), "v".to_string())]),
                 ..Default::default()
             };
-            let path = write_compose_override(&cfg, &dir).unwrap();
+            let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             // Override files may contain resolved secrets: owner-only access
             assert_eq!(mode & 0o777, 0o600, "override file must be 0600");
@@ -1206,7 +1278,7 @@ mod tests {
             )])),
             ..Default::default()
         };
-        let path = write_compose_override(&cfg, &dir).unwrap();
+        let path = write_compose_override(&cfg, &dir.join("devcontainer.json"), &dir).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         // The secret must replace the env entry, not duplicate the key
         assert_eq!(content.matches("DUP:").count(), 1);

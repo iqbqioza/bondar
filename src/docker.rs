@@ -746,12 +746,19 @@ pub fn create_and_start_container(
         cmd.arg("--user").arg(user);
     }
 
+    // Override command: overriding the command also requires overriding the
+    // entrypoint, otherwise images with their own ENTRYPOINT would receive the
+    // keep-alive shell as arguments instead of running it.
+    let override_command = config.override_command.unwrap_or(true);
+    if override_command {
+        cmd.arg("--entrypoint").arg("/bin/sh");
+    }
+
     // Image
     cmd.arg(image_name);
 
     // Override command
-    if config.override_command.unwrap_or(true) {
-        cmd.arg("sh");
+    if override_command {
         cmd.arg("-c");
         cmd.arg("while sleep 1000; do :; done");
     }

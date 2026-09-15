@@ -2125,3 +2125,95 @@ fn test_env_var_alias_expansion() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_entrypoint_overridden_with_command_override() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "entrypoint-override",
+        r#"{"name": "int-entrypoint-override", "image": "bondar-int-entrypoint:1", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    );
+    // An image entrypoint that exits immediately must not receive the
+    // keep-alive shell as arguments; the entrypoint has to be overridden too.
+    std::fs::write(
+        ws.join("Dockerfile"),
+        "FROM ubuntu:22.04\nENTRYPOINT [\"/bin/false\"]\n",
+    )
+    .unwrap();
+    let build = Command::new("docker")
+        .args(["build", "-t", "bondar-int-entrypoint:1"])
+        .arg(&ws)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "image build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&[
+        "up",
+        "--workspace-folder",
+        ws_str,
+        "--remove-existing-container",
+    ]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&up.stderr).contains("is not running"),
+        "container with overridden command should be running: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let exec = bondar(&["exec", "--workspace-folder", ws_str, "--", "true"]);
+    assert!(exec.status.success(), "exec failed on running container");
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    let _ = Command::new("docker")
+        .args(["rmi", "-f", "bondar-int-entrypoint:1"])
+        .output();
+    cleanup(&ws);
+}
+
+#[test]
+fn test_compose_service_without_command_stays_running() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "compose-idle",
+        r#"{"name": "int-compose-idle", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "shutdownAction": "stopCompose", "userEnvProbe": "none"}"#,
+    );
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    volumes:\n      - .:/workspace\n",
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    // Without an entrypoint override the service would exit right away
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let exec = bondar(&["exec", "--workspace-folder", ws_str, "--", "true"]);
+    assert!(
+        exec.status.success(),
+        "exec failed: {}",
+        String::from_utf8_lossy(&exec.stderr)
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
