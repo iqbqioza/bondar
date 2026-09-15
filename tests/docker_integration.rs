@@ -2335,3 +2335,55 @@ RUN printf '%s\n' '#!/bin/sh' 'for arg in "$@"; do last="$arg"; done' 'echo "ban
         .output();
     cleanup(&ws);
 }
+
+#[test]
+fn test_compose_container_user() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "compose-user",
+        r#"{"name": "int-compose-user", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "containerUser": "nobody", "updateRemoteUserUID": false, "shutdownAction": "stopCompose", "userEnvProbe": "none"}"#,
+    );
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n    volumes:\n      - .:/workspace\n",
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let project = project_name_for(&ws);
+    let cid = Command::new("docker")
+        .args([
+            "ps",
+            "-q",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+            "--filter",
+            "label=com.docker.compose.service=app",
+        ])
+        .output()
+        .unwrap();
+    let cid = String::from_utf8_lossy(&cid.stdout).trim().to_string();
+    assert!(!cid.is_empty(), "compose container not found");
+    let user = Command::new("docker")
+        .args(["inspect", "--format", "{{.Config.User}}", &cid])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&user.stdout).trim(),
+        "nobody",
+        "compose containerUser was not applied"
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}

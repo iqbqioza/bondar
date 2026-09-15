@@ -376,6 +376,10 @@ fn write_compose_override(
             yaml.push_str(&format!("      - \"{}\"\n", escape_yaml_value(v)));
         }
     }
+    if let Some(user) = &config.container_user {
+        wrote_any = true;
+        yaml.push_str(&format!("    user: \"{}\"\n", escape_yaml_value(user)));
+    }
     if config.privileged.unwrap_or(false) {
         wrote_any = true;
         yaml.push_str("    privileged: true\n");
