@@ -460,6 +460,19 @@ impl DevContainerConfig {
                     ));
                 }
             }
+            if let Some(cache_from) = &build.cache_from {
+                let entries: Vec<&String> = match cache_from {
+                    CacheFromValue::Single(s) => vec![s],
+                    CacheFromValue::Multiple(v) => v.iter().collect(),
+                };
+                for entry in entries {
+                    if entry.trim().is_empty() {
+                        return Err(BondarError::Config(
+                            "'build.cacheFrom' entries must not be empty".to_string(),
+                        ));
+                    }
+                }
+            }
             for key in build.args.keys() {
                 if key.trim().is_empty() {
                     return Err(BondarError::Config(
@@ -1026,6 +1039,26 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&dir2);
         let _ = std::fs::remove_dir_all(&dir3);
+    }
+
+    #[test]
+    fn test_validate_empty_cache_from() {
+        let single: DevContainerConfig =
+            serde_json::from_str(r#"{"build": {"dockerfile": "Dockerfile", "cacheFrom": ""}}"#)
+                .unwrap();
+        assert!(single.validate().is_err());
+
+        let multiple: DevContainerConfig = serde_json::from_str(
+            r#"{"build": {"dockerfile": "Dockerfile", "cacheFrom": ["a", ""]}}"#,
+        )
+        .unwrap();
+        assert!(multiple.validate().is_err());
+
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"build": {"dockerfile": "Dockerfile", "cacheFrom": ["a", "b"]}}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]
