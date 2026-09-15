@@ -316,6 +316,21 @@ impl DevContainerConfig {
                         "'mounts' entries must not be empty".to_string(),
                     ));
                 }
+                MountValue::String(s) => {
+                    // String mounts use Docker `--mount` syntax, which requires
+                    // a target (target=, dst= or destination=)
+                    let has_target = s.split(',').any(|part| {
+                        let part = part.trim();
+                        part.starts_with("target=")
+                            || part.starts_with("dst=")
+                            || part.starts_with("destination=")
+                    });
+                    if !has_target {
+                        return Err(BondarError::Config(format!(
+                            "'mounts' entry '{s}' must specify a target (target=, dst= or destination=)"
+                        )));
+                    }
+                }
                 MountValue::Object(o) => {
                     if let Some(t) = &o.target
                         && t.trim().is_empty()
@@ -342,7 +357,6 @@ impl DevContainerConfig {
                         ));
                     }
                 }
-                _ => {}
             }
         }
         for cap in &self.cap_add {
@@ -951,6 +965,25 @@ mod tests {
         let abs: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "workspaceFolder": "/ws"}"#).unwrap();
         assert!(abs.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_mount_string_requires_target() {
+        for bad in [
+            r#"{"image": "ubuntu", "mounts": ["type=bind,source=/a"]}"#,
+            r#"{"image": "ubuntu", "mounts": ["type=volume,src=myvol"]}"#,
+        ] {
+            let cfg: DevContainerConfig = serde_json::from_str(bad).unwrap();
+            assert!(cfg.validate().is_err(), "expected '{bad}' to fail");
+        }
+        for good in [
+            r#"{"image": "ubuntu", "mounts": ["type=bind,source=/a,target=/b"]}"#,
+            r#"{"image": "ubuntu", "mounts": ["type=volume,src=v,dst=/b"]}"#,
+            r#"{"image": "ubuntu", "mounts": ["type=tmpfs,destination=/t"]}"#,
+        ] {
+            let cfg: DevContainerConfig = serde_json::from_str(good).unwrap();
+            assert!(cfg.validate().is_ok(), "expected '{good}' to pass");
+        }
     }
 
     #[test]
