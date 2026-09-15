@@ -489,7 +489,12 @@ pub fn create_and_start_container(
                     "Failed to start container {container_name}"
                 )));
             }
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            let settle_ms = if config.override_command == Some(false) {
+                1500
+            } else {
+                300
+            };
+            std::thread::sleep(std::time::Duration::from_millis(settle_ms));
             if !container_running(container_name)? {
                 eprintln!(
                     "Warning: container {container_name} is not running (it may have exited immediately); check 'bondar logs'"
@@ -734,8 +739,14 @@ pub fn create_and_start_container(
 
     // A container that exits immediately (e.g. `overrideCommand: false` with
     // an image whose command is short-lived) would make later exec/lifecycle
-    // steps fail; surface it right away.
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // steps fail; surface it right away. Images with a custom command need a
+    // longer settle time because daemon state updates can lag under load.
+    let settle_ms = if config.override_command == Some(false) {
+        1500
+    } else {
+        300
+    };
+    std::thread::sleep(std::time::Duration::from_millis(settle_ms));
     if !container_running(container_name)? {
         eprintln!(
             "Warning: container {container_name} is not running (it may have exited immediately); check 'bondar logs'"
