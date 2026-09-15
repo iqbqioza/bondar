@@ -428,6 +428,43 @@ pub fn is_known_probe(probe: &str) -> bool {
     )
 }
 
+/// Login shell of a container user, read from `/etc/passwd` (the reference CLI
+/// probes with `containerEnv.SHELL || passwd shell || /bin/sh`). Users defined
+/// outside `/etc/passwd` (e.g. NSS) fall back to bash.
+fn resolve_user_shell(container_name: &str, user: Option<&str>) -> Option<String> {
+    let user = user?;
+    let output = std::process::Command::new("docker")
+        .args(["exec", container_name, "cat", "/etc/passwd"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() >= 7 && (fields[0] == user || fields[2] == user) {
+            let shell = fields[6].trim();
+            if !shell.is_empty() {
+                return Some(shell.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Parse the environment printed between two probe markers, ignoring shell
+/// startup noise (banners, MOTD) that would otherwise look like variables.
+fn parse_marked_env(
+    stdout: &[u8],
+    marker: &str,
+) -> Option<std::collections::HashMap<String, String>> {
+    let text = String::from_utf8_lossy(stdout);
+    let start = text.find(marker)? + marker.len();
+    let rest = &text[start..];
+    let end = rest.find(marker)?;
+    parse_env_output(&rest.as_bytes()[..end])
+}
+
 pub fn probe_user_env(
     container_name: &str,
     user: Option<&str>,
@@ -436,37 +473,60 @@ pub fn probe_user_env(
     if probe == "none" {
         return None;
     }
-    let (shell, args) = match probe {
-        "interactiveShell" => ("bash", vec!["-i", "-c", "env"]),
-        "loginShell" => ("bash", vec!["-l", "-c", "env"]),
-        "loginInteractiveShell" => ("bash", vec!["-l", "-i", "-c", "env"]),
-        _ => ("sh", vec!["-c", "env"]),
+    let shell = resolve_user_shell(container_name, user).unwrap_or_else(|| "bash".to_string());
+    let shell_name = Path::new(&shell)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let flags: Vec<&str> = if shell_name.starts_with("pwsh") {
+        match probe {
+            "loginInteractiveShell" | "loginShell" => vec!["-Login", "-Command"],
+            _ => vec!["-Command"],
+        }
+    } else {
+        match probe {
+            "loginInteractiveShell" => vec!["-lic"],
+            "loginShell" => vec!["-lc"],
+            "interactiveShell" => vec!["-ic"],
+            _ => vec!["-c"],
+        }
     };
+    let marker = format!("BONDAR_ENV_{}", std::process::id());
+    let command = format!("echo -n {marker}; env; echo -n {marker}");
+
     let mut cmd = std::process::Command::new("docker");
     cmd.arg("exec");
     if let Some(u) = user {
         cmd.arg("--user").arg(u);
     }
-    cmd.arg(container_name).arg(shell);
-    for a in args {
-        cmd.arg(a);
+    cmd.arg(container_name).arg(&shell);
+    for flag in flags {
+        cmd.arg(flag);
     }
-    let output = cmd.output().ok()?;
-    if output.status.success() {
-        return parse_env_output(&output.stdout);
+    cmd.arg(&command);
+    if let Ok(output) = cmd.output()
+        && output.status.success()
+        && let Some(env) = parse_marked_env(&output.stdout, &marker)
+    {
+        return Some(env);
     }
-    // Fall back to `sh -c env` when the requested shell (e.g. bash) is missing
+    // Fall back to `sh -c` when the resolved shell is missing or rejects the
+    // flags (e.g. nologin/unsupported shell)
     let mut fallback = std::process::Command::new("docker");
     fallback.arg("exec");
     if let Some(u) = user {
         fallback.arg("--user").arg(u);
     }
-    fallback.arg(container_name).arg("sh").arg("-c").arg("env");
+    fallback
+        .arg(container_name)
+        .arg("sh")
+        .arg("-c")
+        .arg(&command);
     let fb = fallback.output().ok()?;
     if !fb.status.success() {
         return None;
     }
-    parse_env_output(&fb.stdout)
+    parse_marked_env(&fb.stdout, &marker).or_else(|| parse_env_output(&fb.stdout))
 }
 
 fn parse_env_output(stdout: &[u8]) -> Option<std::collections::HashMap<String, String>> {
@@ -596,6 +656,17 @@ fn parse_id_output(output: &str, prefix: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_marked_env_ignores_banner() {
+        let marker = "MARK";
+        let output = b"Welcome to the shell! noise=1\nMARKVAR=1\nOTHER=two\nMARKtrailing";
+        let env = parse_marked_env(output, marker).unwrap();
+        assert_eq!(env.get("VAR").map(String::as_str), Some("1"));
+        assert_eq!(env.get("OTHER").map(String::as_str), Some("two"));
+        assert!(!env.contains_key("noise"));
+        assert!(parse_marked_env(b"no markers here", marker).is_none());
+    }
 
     #[test]
     fn test_effective_probe() {
