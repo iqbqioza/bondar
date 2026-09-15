@@ -582,6 +582,14 @@ fn run_compose(
         }
     };
 
+    // Report a container that exited right after creation.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    if !docker::container_running(&container_name)? {
+        eprintln!(
+            "Warning: container {container_name} is not running (it may have exited immediately); check 'bondar logs'"
+        );
+    }
+
     // Fallback when the image could not be resolved before the override: read
     // the metadata from the created container (container properties cannot be
     // applied anymore, but users and lifecycle hooks still are).

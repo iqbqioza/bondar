@@ -1500,3 +1500,32 @@ fn test_compose_stop_compose_without_primary_container() {
         .output();
     cleanup(&ws);
 }
+
+#[test]
+fn test_container_exiting_immediately_warns() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "exits",
+        r#"{"name": "int-exits", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "overrideCommand": false, "userEnvProbe": "none"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&up.stderr).contains("is not running"),
+        "expected an exited-container warning: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}

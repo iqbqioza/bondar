@@ -717,6 +717,16 @@ pub fn create_and_start_container(
         return Err(BondarError::Docker("docker run failed".to_string()));
     }
 
+    // A container that exits immediately (e.g. `overrideCommand: false` with
+    // an image whose command is short-lived) would make later exec/lifecycle
+    // steps fail; surface it right away.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    if !container_running(container_name)? {
+        eprintln!(
+            "Warning: container {container_name} is not running (it may have exited immediately); check 'bondar logs'"
+        );
+    }
+
     Ok(())
 }
 
