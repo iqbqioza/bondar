@@ -668,8 +668,9 @@ pub fn create_and_start_container(
             }
             if published.contains(&publish) {
                 eprintln!(
-                    "Warning: port '{publish}' is published more than once; docker will bind it repeatedly"
+                    "Warning: port '{publish}' is published more than once; skipping the duplicate"
                 );
+                continue;
             }
             published.push(publish.clone());
             cmd.arg("-p").arg(publish);
@@ -698,8 +699,9 @@ pub fn create_and_start_container(
                 }
                 if published.contains(&publish) {
                     eprintln!(
-                        "Warning: port '{publish}' is published more than once; docker will bind it repeatedly"
+                        "Warning: port '{publish}' is published more than once; skipping the duplicate"
                     );
+                    continue;
                 }
                 published.push(publish.clone());
                 cmd.arg("-p").arg(publish);
