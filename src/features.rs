@@ -1032,6 +1032,8 @@ fn extract_tar_files(data: &[u8], dest_dir: &Path) -> std::io::Result<usize> {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o777));
         }
+        #[cfg(not(unix))]
+        let _ = mode;
     }
     Ok(count)
 }
