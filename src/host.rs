@@ -240,21 +240,24 @@ pub fn handle_update_remote_user_uid(
         return Ok(());
     }
 
-    let host_uid = get_host_uid();
-    let host_gid = get_host_gid();
-
-    // On Windows there is no POSIX UID/GID concept; on Unix running as root
-    // makes UID mapping pointless (root can access any file).
-    if host_uid == 0 {
+    let Some(host_uid) = get_host_uid() else {
         if cfg!(windows) {
             eprintln!(
                 "Warning: UID/GID synchronization is not supported on Windows; skipping updateRemoteUserUID"
             );
         } else {
-            eprintln!(
-                "Warning: bondar is running as root; skipping updateRemoteUserUID (container user would map to uid 0)"
-            );
+            eprintln!("Warning: could not determine the host UID; skipping updateRemoteUserUID");
         }
+        return Ok(());
+    };
+    let host_gid = get_host_gid().unwrap_or(host_uid);
+
+    // On Unix running as root makes UID mapping pointless (root can access any
+    // file)
+    if host_uid == 0 {
+        eprintln!(
+            "Warning: bondar is running as root; skipping updateRemoteUserUID (container user would map to uid 0)"
+        );
         return Ok(());
     }
 
@@ -474,18 +477,18 @@ fn parse_env_output(stdout: &[u8]) -> Option<std::collections::HashMap<String, S
 }
 
 #[cfg(unix)]
-fn get_host_uid() -> u32 {
+fn get_host_uid() -> Option<u32> {
     std::process::Command::new("id")
         .arg("-u")
         .output()
         .ok()
+        .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-        .unwrap_or(1000)
 }
 
 #[cfg(not(unix))]
-fn get_host_uid() -> u32 {
-    0
+fn get_host_uid() -> Option<u32> {
+    None
 }
 
 /// Chown the workspace directory to the given user, guarding against "/".
@@ -549,18 +552,18 @@ fn resolve_primary_group(container_name: &str, user: &str) -> String {
 }
 
 #[cfg(unix)]
-fn get_host_gid() -> u32 {
+fn get_host_gid() -> Option<u32> {
     std::process::Command::new("id")
         .arg("-g")
         .output()
         .ok()
+        .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-        .unwrap_or(1000)
 }
 
 #[cfg(not(unix))]
-fn get_host_gid() -> u32 {
-    0
+fn get_host_gid() -> Option<u32> {
+    None
 }
 
 fn parse_id_output(output: &str, prefix: &str) -> Option<u32> {
@@ -667,7 +670,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_get_host_uid() {
-        assert!(get_host_uid() > 0);
+        assert!(get_host_uid().unwrap() > 0);
+        assert!(get_host_gid().is_some());
     }
 
     #[test]
