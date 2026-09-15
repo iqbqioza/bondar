@@ -1729,3 +1729,30 @@ fn test_malformed_feature_id_warns() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_default_user_env_probe() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "default-probe",
+        r#"{"name": "int-default-probe", "image": "ubuntu:22.04", "workspaceFolder": "/workspace"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&up.stdout).contains("Probing user env with loginInteractiveShell"),
+        "expected the spec default probe: {}",
+        String::from_utf8_lossy(&up.stdout)
+    );
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
