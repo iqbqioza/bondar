@@ -294,11 +294,22 @@ impl DevContainerConfig {
                     "'workspaceMount' must not be empty".to_string(),
                 ));
             }
-            if mount_string_target(m).is_none() {
-                return Err(BondarError::Config(
-                    "'workspaceMount' must specify a target (target=, dst= or destination=)"
-                        .to_string(),
-                ));
+            match mount_string_target(m) {
+                None => {
+                    return Err(BondarError::Config(
+                        "'workspaceMount' must specify a target (target=, dst= or destination=)"
+                            .to_string(),
+                    ));
+                }
+                Some(target) => {
+                    if let Some(folder) = &self.workspace_folder
+                        && &target != folder
+                    {
+                        eprintln!(
+                            "Warning: workspaceMount target '{target}' differs from workspaceFolder '{folder}'; the working directory may not exist"
+                        );
+                    }
+                }
             }
         }
         if let Some(f) = &self.workspace_folder

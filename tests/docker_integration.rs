@@ -1651,3 +1651,21 @@ fn test_name_and_container_name_warning() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_workspace_mount_folder_mismatch_warning() {
+    let ws = make_workspace(
+        "mount-mismatch",
+        r#"{"name": "int-mount-mismatch", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "workspaceMount": "type=bind,source=/tmp,target=/other"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    // `build` goes through load_config (validation emits the warning)
+    let out = bondar(&["build", "--workspace-folder", ws_str]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("differs from workspaceFolder"),
+        "expected a mismatch warning: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}
