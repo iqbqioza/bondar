@@ -591,11 +591,12 @@ pub fn compose_down(
         _ => ("down", None),
     };
 
-    // "stop" fails when no container exists; skip it instead
-    if action == "stop" {
+    // Skipping a missing primary service is only needed for stopContainer;
+    // stopCompose must still stop the remaining services of the project.
+    if shutdown == "stopContainer" {
         let (exists, _) = service_container_state(config, config_path, workspace_folder)?;
         if !exists {
-            println!("Service container does not exist, skipping 'docker compose {action}'");
+            println!("Service container does not exist, skipping 'docker compose stop'");
             return Ok(());
         }
     }
