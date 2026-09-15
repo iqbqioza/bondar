@@ -1859,3 +1859,69 @@ fn test_duplicate_port_entries_warn() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_compose_up_removes_orphans() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = std::env::temp_dir().join("bondar-int-compose-up-orphans");
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join(".devcontainer")).unwrap();
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n  db:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-compose-up-orphans", "dockerComposeFile": "../docker-compose.yml", "service": "app", "runServices": ["db"], "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let up1 = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(up1.status.success(), "first up failed");
+
+    // Remove the "db" service (and its runServices entry) and run up again:
+    // its container becomes an orphan
+    std::fs::write(
+        ws.join("docker-compose.yml"),
+        "services:\n  app:\n    image: ubuntu:22.04\n    command: sh -c 'while sleep 1000; do :; done'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/devcontainer.json"),
+        r#"{"name": "int-compose-up-orphans", "dockerComposeFile": "../docker-compose.yml", "service": "app", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    )
+    .unwrap();
+    let up2 = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up2.status.success(),
+        "second up failed: {}",
+        String::from_utf8_lossy(&up2.stderr)
+    );
+
+    let project = project_name_for(&ws);
+    let db = Command::new("docker")
+        .args([
+            "ps",
+            "-a",
+            "-q",
+            "--filter",
+            &format!("label=com.docker.compose.project={project}"),
+            "--filter",
+            "label=com.docker.compose.service=db",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        db.stdout.is_empty(),
+        "orphan container was not removed by up"
+    );
+
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
