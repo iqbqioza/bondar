@@ -352,7 +352,8 @@ fn prefetch_one_feature_inner(
         return Ok(());
     };
     prefetched.push(id.to_string());
-    if let Some(meta) = read_feature_metadata(&dest_dir) {
+    let meta = read_feature_metadata(&dest_dir);
+    if let Some(meta) = &meta {
         if meta
             .get("deprecated")
             .and_then(|v| v.as_bool())
@@ -372,7 +373,10 @@ fn prefetch_one_feature_inner(
             }
         }
     }
-    let resolved_props = collect_feature_container_properties(id, &dest_dir);
+    let resolved_props = match &meta {
+        Some(meta) => container_properties_from_value(meta, &format!("feature '{id}'")),
+        None => FeatureContainerProperties::default(),
+    };
     merge_feature_container_properties(props, resolved_props);
     visited.insert(id.to_string());
     Ok(())
@@ -1184,8 +1188,12 @@ fn option_value_string(value: &serde_json::Value) -> String {
 
 /// User-provided feature option values that are not allowed by the feature's
 /// declared `enum` (the spec treats these as strict values).
-fn invalid_feature_option_values(id: &str, opts: &serde_json::Value, dir: &Path) -> Vec<String> {
-    let Some(meta) = read_feature_metadata(dir) else {
+fn invalid_feature_option_values(
+    id: &str,
+    opts: &serde_json::Value,
+    meta: Option<&serde_json::Value>,
+) -> Vec<String> {
+    let Some(meta) = meta else {
         return Vec::new();
     };
     let Some(declared) = meta.get("options").and_then(|v| v.as_object()) else {
@@ -1218,8 +1226,12 @@ fn invalid_feature_option_values(id: &str, opts: &serde_json::Value, dir: &Path)
 
 /// Warn when a user-provided feature option value is not allowed by the
 /// feature's declared `enum`.
-fn warn_invalid_feature_option_values(id: &str, opts: &serde_json::Value, dir: &Path) {
-    for message in invalid_feature_option_values(id, opts, dir) {
+fn warn_invalid_feature_option_values(
+    id: &str,
+    opts: &serde_json::Value,
+    meta: Option<&serde_json::Value>,
+) {
+    for message in invalid_feature_option_values(id, opts, meta) {
         eprintln!("{message}");
     }
 }
@@ -1228,8 +1240,11 @@ fn warn_invalid_feature_option_values(id: &str, opts: &serde_json::Value, dir: &
 /// omitted; the spec requires omitted options to be exported with their
 /// default values when `install.sh` runs. User-provided values win and options
 /// without a default are left unset.
-fn merge_feature_option_defaults(opts: &serde_json::Value, dir: &Path) -> serde_json::Value {
-    let Some(meta) = read_feature_metadata(dir) else {
+fn merge_feature_option_defaults(
+    opts: &serde_json::Value,
+    meta: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let Some(meta) = meta else {
         return opts.clone();
     };
     let Some(declared) = meta.get("options").and_then(|v| v.as_object()) else {
@@ -1346,11 +1361,12 @@ fn install_fetched_feature(
     id: &str,
     dest_dir: &Path,
     opts: &serde_json::Value,
+    meta: Option<&serde_json::Value>,
     container_name: Option<&str>,
     remote_user: Option<&str>,
     container_user: Option<&str>,
 ) -> Result<()> {
-    if let Some(meta) = read_feature_metadata(dest_dir) {
+    if let Some(meta) = meta {
         if let Some(entrypoint) = meta.get("entrypoint").and_then(|v| v.as_str())
             && !entrypoint.is_empty()
         {
@@ -1370,10 +1386,10 @@ fn install_fetched_feature(
     }
 
     // Warn about user-provided option values that the feature does not allow
-    warn_invalid_feature_option_values(id, opts, dest_dir);
+    warn_invalid_feature_option_values(id, opts, meta);
 
     // Apply defaults for omitted options declared in the feature metadata
-    let effective_opts = merge_feature_option_defaults(opts, dest_dir);
+    let effective_opts = merge_feature_option_defaults(opts, meta);
 
     if let Some(container) = container_name {
         let container_path = format!("/tmp/bondar_features/{}", sanitize_id(id));
@@ -1477,8 +1493,9 @@ impl<'a> FeatureInstaller<'a> {
             return Ok(());
         };
 
+        let meta = read_feature_metadata(&dest_dir);
         // Hard dependencies declared in the feature metadata install first
-        if let Some(meta) = read_feature_metadata(&dest_dir)
+        if let Some(meta) = &meta
             && let Some(deps) = meta.get("dependsOn").and_then(|v| v.as_object())
         {
             for (dep_id, dep_opts) in deps {
@@ -1494,6 +1511,7 @@ impl<'a> FeatureInstaller<'a> {
             id,
             &dest_dir,
             &effective_opts,
+            meta.as_ref(),
             self.container_name,
             self.remote_user,
             self.container_user,
@@ -1695,13 +1713,15 @@ mod tests {
         .unwrap();
 
         // User values win; missing options get their declared defaults
-        let merged = merge_feature_option_defaults(&serde_json::json!({"version": "18"}), &dir);
+        let meta = read_feature_metadata(&dir);
+        let merged =
+            merge_feature_option_defaults(&serde_json::json!({"version": "18"}), meta.as_ref());
         assert_eq!(merged["version"], "18");
         assert_eq!(merged["installZsh"], true);
         assert!(merged.get("noDefault").is_none());
 
         // No user options -> all defaults; non-object opts are replaced
-        let merged2 = merge_feature_option_defaults(&serde_json::Value::Null, &dir);
+        let merged2 = merge_feature_option_defaults(&serde_json::Value::Null, meta.as_ref());
         assert_eq!(merged2["installZsh"], true);
         assert_eq!(merged2["version"], "latest");
 
@@ -1709,7 +1729,7 @@ mod tests {
         let empty = std::env::temp_dir().join("bondar-feature-defaults-empty");
         let _ = std::fs::remove_dir_all(&empty);
         std::fs::create_dir_all(&empty).unwrap();
-        let unchanged = merge_feature_option_defaults(&serde_json::json!({"a": 1}), &empty);
+        let unchanged = merge_feature_option_defaults(&serde_json::json!({"a": 1}), None);
         assert_eq!(unchanged, serde_json::json!({"a": 1}));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1848,18 +1868,19 @@ mod tests {
             r#"{"options":{"version":{"type":"string","enum":["18","20"]},"flag":{"type":"boolean","enum":[true,false]}}}"#,
         )
         .unwrap();
+        let meta = read_feature_metadata(&dir);
         // Valid values produce no messages (boolean compared as string)
         let valid = serde_json::json!({"version": "18", "flag": true});
-        assert!(invalid_feature_option_values("ghcr.io/a/b", &valid, &dir).is_empty());
+        assert!(invalid_feature_option_values("ghcr.io/a/b", &valid, meta.as_ref()).is_empty());
         // Invalid values are reported
         let invalid = serde_json::json!({"version": "19", "flag": "maybe"});
-        let messages = invalid_feature_option_values("ghcr.io/a/b", &invalid, &dir);
+        let messages = invalid_feature_option_values("ghcr.io/a/b", &invalid, meta.as_ref());
         assert_eq!(messages.len(), 2);
         assert!(messages[0].contains("version"));
         assert!(messages[1].contains("flag"));
         // Unknown option names are ignored
         let unknown = serde_json::json!({"other": "x"});
-        assert!(invalid_feature_option_values("ghcr.io/a/b", &unknown, &dir).is_empty());
+        assert!(invalid_feature_option_values("ghcr.io/a/b", &unknown, meta.as_ref()).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
