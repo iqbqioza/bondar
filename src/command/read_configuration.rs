@@ -182,9 +182,7 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
 
     let mut env: Map<String, Value> = Map::new();
     let target = if cfg.docker_compose_file.is_some() {
-        cfg.workspace_folder
-            .clone()
-            .unwrap_or_else(|| "/".to_string())
+        cfg.compose_workspace_folder(ws)
     } else {
         cfg.workspace_folder_or_default(ws)
     };
@@ -236,7 +234,14 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         json!(cfg.name.clone().unwrap_or(default_name)),
     );
     merged.insert("image".into(), json!(cfg.image));
-    merged.insert("workspaceFolder".into(), json!(cfg.workspace_folder));
+    merged.insert(
+        "workspaceFolder".into(),
+        json!(if cfg.docker_compose_file.is_some() {
+            cfg.compose_workspace_folder(ws)
+        } else {
+            cfg.workspace_folder_or_default(ws)
+        }),
+    );
     merged.insert("remoteUser".into(), json!(cfg.remote_user));
     merged.insert("containerUser".into(), json!(cfg.container_user));
     merged.insert("mergedEnvironment".into(), Value::Object(env));
@@ -323,9 +328,7 @@ fn print_merged_configuration(cfg: &config::DevContainerConfig, ws: &std::path::
         merged.insert("containerName".into(), json!(cfg.container_name(ws)));
     }
     let default_ws = if cfg.docker_compose_file.is_some() {
-        cfg.workspace_folder
-            .clone()
-            .unwrap_or_else(|| "/".to_string())
+        cfg.compose_workspace_folder(ws)
     } else {
         cfg.workspace_folder_or_default(ws)
     };

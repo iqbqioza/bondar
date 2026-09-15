@@ -516,10 +516,7 @@ fn run_compose(
 
     if let Some(cmd) = &merged_cfg.initialize_command {
         println!("Running initializeCommand on host...");
-        let host_target = merged_cfg
-            .workspace_folder
-            .clone()
-            .unwrap_or_else(|| "/".to_string());
+        let host_target = merged_cfg.compose_workspace_folder(ws);
         lifecycle::execute_host_lifecycle_with_target(cmd, ws, &host_target)?;
     }
 
@@ -623,10 +620,7 @@ fn run_compose(
         )
     };
 
-    let workspace_target = cfg
-        .workspace_folder
-        .clone()
-        .unwrap_or_else(|| "/".to_string());
+    let workspace_target = cfg.compose_workspace_folder(ws);
     let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
     let container_env_map: std::collections::HashMap<String, String> = cfg
         .container_env

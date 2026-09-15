@@ -503,16 +503,18 @@ pub(crate) fn workspace_chown_target(
     workspace_folder: &Path,
 ) -> String {
     if config.docker_compose_file.is_some() {
-        return config
-            .workspace_folder
-            .clone()
-            .unwrap_or_else(|| "/".to_string());
+        return config.compose_workspace_folder(workspace_folder);
     }
     config
         .workspace_mount
         .as_deref()
         .and_then(crate::config::mount_string_target)
-        .or_else(|| config.workspace_folder.clone())
+        .or_else(|| {
+            config
+                .workspace_folder
+                .as_deref()
+                .map(|f| crate::docker::expand_workspace_folder(f, workspace_folder))
+        })
         .unwrap_or_else(|| crate::config::default_workspace_folder(workspace_folder))
 }
 

@@ -2060,3 +2060,35 @@ fn test_secret_without_localenv_warns() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_workspace_folder_variable_expansion() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "wsfolder-var",
+        r#"{"name": "int-wsfolder-var", "image": "ubuntu:22.04", "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}", "userEnvProbe": "none"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let basename = ws.file_name().unwrap().to_str().unwrap();
+    let expected = format!("/workspaces/{basename}");
+
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let pwd = bondar(&["exec", "--workspace-folder", ws_str, "--", "pwd"]);
+    assert!(pwd.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&pwd.stdout).trim(),
+        expected,
+        "workspaceFolder variable was not expanded"
+    );
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}

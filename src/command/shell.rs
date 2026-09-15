@@ -23,9 +23,7 @@ pub fn run(workspace_folder: Option<PathBuf>, config_path: Option<PathBuf>) -> R
             .clone()
             .or_else(|| cfg.container_user.clone());
         let workdir = Some(if cfg.docker_compose_file.is_some() {
-            cfg.workspace_folder
-                .clone()
-                .unwrap_or_else(|| "/".to_string())
+            cfg.compose_workspace_folder(&ws)
         } else {
             cfg.workspace_folder_or_default(&ws)
         });
