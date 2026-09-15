@@ -523,7 +523,7 @@ impl DevContainerConfig {
             }
         }
         if let Some(secrets) = &self.secrets {
-            for key in secrets.keys() {
+            for (key, value) in secrets {
                 if key.trim().is_empty() {
                     return Err(BondarError::Config(
                         "'secrets' keys must not be empty".to_string(),
@@ -532,6 +532,13 @@ impl DevContainerConfig {
                 if key.contains('=') {
                     return Err(BondarError::Config(format!(
                         "'secrets' key '{key}' must not contain '='"
+                    )));
+                }
+                if let Some(local_env) = value.get("localEnv")
+                    && !local_env.is_string()
+                {
+                    return Err(BondarError::Config(format!(
+                        "'secrets' entry '{key}' localEnv must be a string, got {local_env}"
                     )));
                 }
             }
@@ -897,6 +904,19 @@ mod tests {
         )
         .unwrap();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_secrets_localenv_type() {
+        let bad: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"S": {"localEnv": 1}}}"#)
+                .unwrap();
+        assert!(bad.validate().is_err());
+
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"image": "ubuntu", "secrets": {"S": {"localEnv": "VAR"}}}"#)
+                .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]
