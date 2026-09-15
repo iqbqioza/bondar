@@ -47,6 +47,9 @@ pub fn run(
 
     if !cfg.effective_has_build() {
         println!("No build configured, image: {:?}", cfg.image);
+        if no_cache {
+            eprintln!("Warning: --no-cache has no effect (no 'build' section configured)");
+        }
         return Ok(());
     }
 

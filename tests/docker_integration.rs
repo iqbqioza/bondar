@@ -1686,3 +1686,24 @@ fn test_stopcompose_without_compose_warns() {
     );
     cleanup(&ws);
 }
+
+#[test]
+fn test_build_no_cache_without_build_warns() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "nocache-image",
+        r#"{"name": "int-nocache-image", "image": "ubuntu:22.04"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let out = bondar(&["build", "--workspace-folder", ws_str, "--no-cache"]);
+    assert!(out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--no-cache has no effect"),
+        "expected a --no-cache warning: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}
