@@ -842,13 +842,13 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
         // Feature images typically carry /install.sh at the root; copy only
         // that file instead of the whole root filesystem (which may include
         // mount points that docker cp cannot handle).
-        let cp_install = created
+        let mut extracted = created
             && std::process::Command::new("docker")
                 .args(["cp", &format!("{tmp_name}:/install.sh"), dest_str])
                 .status()
                 .map(|s| s.success())
                 .unwrap_or(false);
-        let extracted = if cp_install {
+        if extracted {
             // Best effort: without the metadata file, option defaults,
             // customizations and installsAfter declared by the feature are lost
             for file in ["devcontainer-feature.json", "devcontainer-features.json"] {
@@ -858,26 +858,48 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
                     .stderr(std::process::Stdio::null())
                     .status();
             }
-            true
-        } else {
-            created
-                && std::process::Command::new("docker")
-                    .args(["cp", &format!("{tmp_name}:/"), dest_str])
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false)
-        };
+        }
+        if !extracted && created {
+            // Feature artifacts use a custom OCI layer media type that Docker
+            // does not expose in the container rootfs, so the container copy
+            // above sees nothing. The layers are plain tar files inside
+            // `docker save` output.
+            let save_path = std::env::temp_dir().join(format!(
+                "bondar-feature-save-{}-{}.tar",
+                std::process::id(),
+                id_suffix
+            ));
+            let saved = std::process::Command::new("docker")
+                .args(["save", feature_image, "-o"])
+                .arg(&save_path)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if saved && let Ok(bytes) = std::fs::read(&save_path) {
+                extracted = extract_feature_layers_from_save(&bytes, dest_dir).unwrap_or(false);
+                if extracted {
+                    println!("  Extracted feature files from the OCI layers");
+                }
+            }
+            let _ = std::fs::remove_file(&save_path);
+        }
+        if !extracted && created {
+            extracted = std::process::Command::new("docker")
+                .args(["cp", &format!("{tmp_name}:/"), dest_str])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        }
         let _ = std::process::Command::new("docker")
             .args(["rm", "-f", &tmp_name])
             .status();
-        if extracted {
+        if extracted && dest_dir.join("install.sh").exists() {
             println!("  Extracted feature files from image");
             ensure_extracted(dest_dir);
             return Ok(());
         }
-        eprintln!("  Warning: could not extract feature files from pulled image");
         Err(BondarError::Docker(format!(
-            "Unable to fetch feature {id} (no oras, docker pull extraction failed)"
+            "Unable to fetch feature {id}: install.sh was not found in the published artifact; install 'oras' or use a feature that is published as a regular image"
         )))
     } else {
         eprintln!(
@@ -888,6 +910,181 @@ fn fetch_feature(id: &str, dest_dir: &Path) -> Result<()> {
             "Unable to fetch feature {id} (no oras, docker pull failed)"
         )))
     }
+}
+
+fn round_up_512(size: usize) -> usize {
+    size.div_ceil(512) * 512
+}
+
+/// Read a NUL-terminated string from a tar header field.
+fn tar_str(field: &[u8]) -> String {
+    let end = field.iter().position(|&b| b == 0).unwrap_or(field.len());
+    String::from_utf8_lossy(&field[..end]).trim().to_string()
+}
+
+/// Read an octal numeric tar header field.
+fn tar_octal(field: &[u8]) -> Option<usize> {
+    let text = tar_str(field);
+    if text.is_empty() {
+        return Some(0);
+    }
+    usize::from_str_radix(&text, 8).ok()
+}
+
+/// Parse a PAX extended header payload for a `path` record.
+fn tar_pax_path(data: &[u8]) -> Option<String> {
+    let mut offset = 0;
+    while offset < data.len() {
+        let rest = &data[offset..];
+        let space = rest.iter().position(|&b| b == b' ')?;
+        let len: usize = std::str::from_utf8(&rest[..space]).ok()?.parse().ok()?;
+        if len == 0 || offset + len > data.len() {
+            return None;
+        }
+        let record = &rest[space + 1..len];
+        let record = record.strip_suffix(b"\n").unwrap_or(record);
+        if let Some(value) = record.strip_prefix(b"path=") {
+            return Some(String::from_utf8_lossy(value).to_string());
+        }
+        offset += len;
+    }
+    None
+}
+
+/// A path from a tar entry that is safe to write below the extraction root.
+fn tar_safe_path(name: &str) -> Option<String> {
+    let name = name.trim_start_matches("./").trim_start_matches('/');
+    if name.is_empty() {
+        return None;
+    }
+    let path = Path::new(name);
+    if path.is_absolute()
+        || path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// Iterate a POSIX/ustar tar archive and return the regular files it contains
+/// as (normalized path, contents, mode). GNU long names and PAX `path` records
+/// are honored; directories, symlinks and other special entries are skipped.
+fn tar_members(data: &[u8]) -> Vec<(String, Vec<u8>, u32)> {
+    let mut members = Vec::new();
+    let mut offset = 0usize;
+    let mut long_name: Option<String> = None;
+    let mut pax_path: Option<String> = None;
+    while offset + 512 <= data.len() {
+        let header = &data[offset..offset + 512];
+        if header.iter().all(|&b| b == 0) {
+            break;
+        }
+        let mut name = tar_str(&header[0..100]);
+        let prefix = tar_str(&header[345..500]);
+        if !prefix.is_empty() && !name.starts_with('/') {
+            name = format!("{prefix}/{name}");
+        }
+        let Some(size) = tar_octal(&header[124..136]) else {
+            break;
+        };
+        let typeflag = header[156];
+        let mode = tar_octal(&header[100..108]).unwrap_or(0o644) as u32;
+        let content_start = offset + 512;
+        let content_end = content_start.saturating_add(size);
+        if content_end > data.len() {
+            break;
+        }
+        let content = &data[content_start..content_end];
+        match typeflag {
+            b'L' => long_name = Some(String::from_utf8_lossy(content).trim_end().to_string()),
+            b'x' => pax_path = tar_pax_path(content),
+            b'0' | 0 => {
+                let effective = pax_path.take().or_else(|| long_name.take());
+                let effective = effective.as_deref().unwrap_or(&name);
+                if let Some(safe) = tar_safe_path(effective) {
+                    members.push((safe, content.to_vec(), mode));
+                }
+            }
+            _ => {
+                pax_path = None;
+                long_name = None;
+            }
+        }
+        offset = content_end + round_up_512(size) - size;
+    }
+    members
+}
+
+/// Extract the regular files of a feature layer tar below `dest_dir`.
+fn extract_tar_files(data: &[u8], dest_dir: &Path) -> std::io::Result<usize> {
+    let members = tar_members(data);
+    let count = members.len();
+    for (name, content, mode) in members {
+        let path = dest_dir.join(&name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, &content)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o777));
+        }
+    }
+    Ok(count)
+}
+
+/// Extract a feature from a `docker save` archive. Feature artifacts are OCI
+/// images whose custom layer media type Docker does not materialize in a
+/// container rootfs (so `docker cp` cannot see `install.sh`); the layer blobs
+/// are uncompressed tar files inside the save archive.
+fn extract_feature_layers_from_save(save: &[u8], dest_dir: &Path) -> std::io::Result<bool> {
+    let members = tar_members(save);
+    let layer_names: Vec<String> = members
+        .iter()
+        .find(|(name, _, _)| name == "manifest.json")
+        .and_then(|(_, manifest, _)| serde_json::from_slice::<serde_json::Value>(manifest).ok())
+        .and_then(|value| {
+            value.as_array().map(|entries| {
+                entries
+                    .iter()
+                    .flat_map(|entry| {
+                        entry
+                            .get("Layers")
+                            .and_then(|v| v.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|l| l.as_str().map(String::from))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .filter(|names| !names.is_empty())
+        .unwrap_or_else(|| {
+            members
+                .iter()
+                .map(|(name, _, _)| name.clone())
+                .filter(|name| name.starts_with("blobs/") || name.ends_with("layer.tar"))
+                .collect()
+        });
+    let mut extracted = false;
+    for name in layer_names {
+        let Some((_, data, _)) = members.iter().find(|(n, _, _)| n == &name) else {
+            continue;
+        };
+        // gzip-compressed layers (regular Docker images) are handled by the
+        // container-rootfs fallback instead
+        if data.starts_with(&[0x1f, 0x8b]) {
+            continue;
+        }
+        if extract_tar_files(data, dest_dir).unwrap_or(0) > 0 {
+            extracted = true;
+        }
+    }
+    Ok(extracted)
 }
 
 /// Some OCI registries return the feature as a tar archive. Expand it so
@@ -1548,6 +1745,104 @@ impl<'a> FeatureInstaller<'a> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// Build a minimal ustar archive from (name, typeflag, contents) entries.
+    fn make_tar(entries: &[(&str, u8, &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (name, typeflag, content) in entries {
+            let mut header = [0u8; 512];
+            header[..name.len()].copy_from_slice(name.as_bytes());
+            header[100..108].copy_from_slice(b"0000755\0");
+            header[108..116].copy_from_slice(b"0000000\0");
+            header[116..124].copy_from_slice(b"0000000\0");
+            header[124..136].copy_from_slice(format!("{:011o}\0", content.len()).as_bytes());
+            header[136..148].copy_from_slice(b"00000000000\0");
+            header[148..156].copy_from_slice(b"        ");
+            header[156] = *typeflag;
+            header[257..263].copy_from_slice(b"ustar\0");
+            header[263..265].copy_from_slice(b"00");
+            let sum: u32 = header.iter().map(|&b| b as u32).sum();
+            header[148..156].copy_from_slice(format!("{:06o}\0 ", sum).as_bytes());
+            out.extend_from_slice(&header);
+            out.extend_from_slice(content);
+            out.resize(out.len() + (512 - content.len() % 512) % 512, 0);
+        }
+        out.resize(out.len() + 1024, 0);
+        out
+    }
+
+    #[test]
+    fn test_extract_tar_files() {
+        let dir = std::env::temp_dir().join("bondar-feature-tar-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tar = make_tar(&[
+            ("./install.sh", b'0', b"#!/bin/sh\necho hi\n"),
+            ("./devcontainer-feature.json", b'0', b"{}"),
+        ]);
+        let count = extract_tar_files(&tar, &dir).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("install.sh")).unwrap(),
+            "#!/bin/sh\necho hi\n"
+        );
+        assert!(dir.join("devcontainer-feature.json").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extract_tar_files_skips_unsafe_paths() {
+        let dir = std::env::temp_dir().join("bondar-feature-tar-unsafe");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tar = make_tar(&[
+            ("../evil.sh", b'0', b"bad"),
+            ("/abs/evil.sh", b'0', b"bad"),
+            ("./ok.sh", b'0', b"ok"),
+        ]);
+        let count = extract_tar_files(&tar, &dir).unwrap();
+        assert_eq!(count, 2);
+        assert!(dir.join("ok.sh").exists());
+        // Absolute paths are made relative, so nothing is written outside dest
+        assert!(dir.join("abs/evil.sh").exists());
+        assert!(!dir.parent().unwrap().join("evil.sh").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extract_feature_layers_from_save() {
+        let dir = std::env::temp_dir().join("bondar-feature-save-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let layer = make_tar(&[
+            ("./install.sh", b'0', b"#!/bin/sh\n"),
+            ("./devcontainer-feature.json", b'0', b"{\"id\":\"demo\"}"),
+        ]);
+        let manifest = br#"[{"Config":"blobs/sha256/cfg","Layers":["blobs/sha256/layer"]}]"#;
+        let save = make_tar(&[
+            ("manifest.json", b'0', manifest),
+            ("blobs/sha256/cfg", b'0', b"{}"),
+            ("blobs/sha256/layer", b'0', &layer),
+        ]);
+        assert!(extract_feature_layers_from_save(&save, &dir).unwrap());
+        assert!(dir.join("install.sh").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_extract_feature_layers_ignores_gzip() {
+        let dir = std::env::temp_dir().join("bondar-feature-save-gzip");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let gzip_stub = [0x1f, 0x8b, 0x08, 0x00];
+        let manifest = br#"[{"Layers":["blobs/sha256/layer"]}]"#;
+        let save = make_tar(&[
+            ("manifest.json", b'0', manifest),
+            ("blobs/sha256/layer", b'0', &gzip_stub),
+        ]);
+        assert!(!extract_feature_layers_from_save(&save, &dir).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_handle_empty() {
