@@ -1328,7 +1328,12 @@ pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
                             key.clone()
                         }
                     },
-                    None => key.clone(),
+                    None => {
+                        eprintln!(
+                            "Warning: secret '{key}' has no 'localEnv' entry; using the secret name as the variable name"
+                        );
+                        key.clone()
+                    }
                 };
                 if let Ok(value) = std::env::var(&var_name) {
                     resolved.push((key.clone(), value));

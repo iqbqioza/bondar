@@ -2024,3 +2024,29 @@ fn test_gpu_cores_zero_warns() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_secret_without_localenv_warns() {
+    let ws = make_workspace(
+        "secret-localenv",
+        r#"{"name": "int-secret-localenv", "image": "ubuntu:22.04", "secrets": {"S": {}}}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let out = bondar(&[
+        "read-configuration",
+        "--workspace-folder",
+        ws_str,
+        "--include-merged-configuration",
+    ]);
+    assert!(
+        out.status.success(),
+        "read-configuration failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("has no 'localEnv' entry"),
+        "expected a missing-localEnv warning: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    cleanup(&ws);
+}
