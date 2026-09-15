@@ -708,7 +708,7 @@ pub fn default_workspace_folder(workspace_folder: &Path) -> String {
 }
 
 /// Target of a Docker `--mount` string, when present.
-fn mount_string_target(spec: &str) -> Option<String> {
+pub(crate) fn mount_string_target(spec: &str) -> Option<String> {
     for part in spec.split(',') {
         let part = part.trim();
         for key in ["target=", "dst=", "destination="] {
