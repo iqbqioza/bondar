@@ -100,7 +100,10 @@ try {
         $expected = if ($line) { ($line.ToString() -split '\s+')[0] } else { $null }
         $actual = (Get-FileHash -LiteralPath (Join-Path $tmpDir 'bondar.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
         if (-not $expected) {
-            Write-Host 'Warning: SHA256SUMS does not contain an entry for this asset; skipping checksum verification.' -ForegroundColor Yellow
+            if ($env:BONDAR_INSECURE -ne '1') {
+                throw "Checksum missing: SHA256SUMS has no entry for $Asset (set BONDAR_INSECURE=1 to skip)."
+            }
+            Write-Host 'Warning: SHA256SUMS has no entry for this asset; proceeding without verification due to BONDAR_INSECURE=1.' -ForegroundColor Yellow
         }
         elseif ($actual -ne $expected.ToLowerInvariant()) {
             throw "Checksum verification failed for $Asset."
