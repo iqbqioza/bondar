@@ -169,7 +169,11 @@ pub fn run(
     }
 
     if include_merged_configuration {
-        print_merged_configuration(&cfg, &ws);
+        // Reflect the feature-declared container properties that `up`/`exec`
+        // merge from the cache (no network fetch here).
+        let mut merged_cfg = cfg.clone();
+        crate::features::apply_cached_feature_container_properties(&mut merged_cfg);
+        print_merged_configuration(&merged_cfg, &ws);
     }
 
     Ok(())
