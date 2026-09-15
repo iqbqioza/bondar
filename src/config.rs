@@ -638,13 +638,24 @@ impl DevContainerConfig {
         Ok(())
     }
 
-    /// Default container workspace folder for image/Dockerfile configurations:
-    /// `/workspaces/<workspace directory name>` per the spec. Compose
-    /// configurations use "/" as their default (handled by callers).
+    /// Effective container workspace folder for image/Dockerfile
+    /// configurations: the configured value (with `${...}` variables expanded)
+    /// or `/workspaces/<workspace directory name>` per the spec. Compose
+    /// configurations use "/" as their default (see `compose_workspace_folder`).
     pub fn workspace_folder_or_default(&self, workspace_folder: &Path) -> String {
-        self.workspace_folder
-            .clone()
-            .unwrap_or_else(|| default_workspace_folder(workspace_folder))
+        match &self.workspace_folder {
+            Some(f) => crate::docker::expand_workspace_folder(f, workspace_folder),
+            None => default_workspace_folder(workspace_folder),
+        }
+    }
+
+    /// Effective container workspace folder for compose configurations: the
+    /// configured value (with `${...}` variables expanded) or "/" per the spec.
+    pub fn compose_workspace_folder(&self, workspace_folder: &Path) -> String {
+        match &self.workspace_folder {
+            Some(f) => crate::docker::expand_workspace_folder(f, workspace_folder),
+            None => "/".to_string(),
+        }
     }
 
     /// `remoteEnv` entries with a `null` value are treated as unset (the
@@ -1381,6 +1392,35 @@ mod tests {
         assert_eq!(
             cfg2.workspace_folder_or_default(Path::new("/tmp/my-workspace")),
             "/myws"
+        );
+
+        // `${...}` variables are expanded (real templates use this form)
+        let cfg3 = DevContainerConfig {
+            workspace_folder: Some("/workspaces/${localWorkspaceFolderBasename}".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg3.workspace_folder_or_default(Path::new("/tmp/my-workspace")),
+            "/workspaces/my-workspace"
+        );
+
+        // Compose defaults to "/" but expands an explicit value
+        let compose = DevContainerConfig {
+            docker_compose_file: Some(ComposeFileValue::Single("c.yml".to_string())),
+            ..Default::default()
+        };
+        assert_eq!(
+            compose.compose_workspace_folder(Path::new("/tmp/my-workspace")),
+            "/"
+        );
+        let compose_var = DevContainerConfig {
+            docker_compose_file: Some(ComposeFileValue::Single("c.yml".to_string())),
+            workspace_folder: Some("/ws/${localWorkspaceFolderBasename}".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            compose_var.compose_workspace_folder(Path::new("/tmp/my-workspace")),
+            "/ws/my-workspace"
         );
     }
 

@@ -67,9 +67,7 @@ pub fn run(
         .or_else(|| cfg.container_user.clone());
     let exec_workdir = workdir.filter(|w| !w.is_empty()).or_else(|| {
         Some(if cfg.docker_compose_file.is_some() {
-            cfg.workspace_folder
-                .clone()
-                .unwrap_or_else(|| "/".to_string())
+            cfg.compose_workspace_folder(&ws)
         } else {
             cfg.workspace_folder_or_default(&ws)
         })

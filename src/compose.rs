@@ -27,10 +27,7 @@ fn compose_files_args(
         ComposeFileValue::Multiple(v) => v.clone(),
     };
     // Variable expansion uses the compose workspace folder (default "/" per spec)
-    let container_target = config
-        .workspace_folder
-        .clone()
-        .unwrap_or_else(|| "/".to_string());
+    let container_target = config.compose_workspace_folder(workspace_folder);
     let mut args = Vec::new();
     for f in files {
         // Variable expansion is relative to the workspace root
@@ -140,10 +137,7 @@ fn write_compose_override(config: &DevContainerConfig, workspace_folder: &Path) 
         .service
         .as_deref()
         .ok_or_else(|| BondarError::Config("No service specified".to_string()))?;
-    let container_target = config
-        .workspace_folder
-        .clone()
-        .unwrap_or_else(|| "/".to_string());
+    let container_target = config.compose_workspace_folder(workspace_folder);
 
     let mut yaml = String::from("services:\n");
     yaml.push_str(&format!("  {}:\n", escape_yaml_key(service)));
@@ -773,10 +767,7 @@ pub fn compose_exec(
     }
     // `${containerWorkspaceFolder}` expansions always use the configured
     // workspace folder, even when `--workdir` overrides the working directory.
-    let container_workspace = config
-        .workspace_folder
-        .clone()
-        .unwrap_or_else(|| "/".to_string());
+    let container_workspace = config.compose_workspace_folder(workspace_folder);
     if let Some(env_map) = env {
         // Resolve ${containerEnv:KEY} references against the containerEnv map
         let container_env_map: std::collections::HashMap<String, String> = config

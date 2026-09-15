@@ -1153,6 +1153,25 @@ pub fn expand_vars_for_container(
     result
 }
 
+/// Expand `${...}` variables in a `workspaceFolder` value. Unlike other
+/// properties, `${containerWorkspaceFolder}` (and its basename) would be
+/// self-referential here and are left untouched.
+pub fn expand_workspace_folder(input: &str, workspace_folder: &Path) -> String {
+    let mut result = input.to_string();
+    let ws = workspace_folder.to_string_lossy().to_string();
+    let basename = workspace_folder
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+
+    result = result.replace("${localWorkspaceFolder}", &ws);
+    result = result.replace("${localWorkspaceFolderBasename}", &basename);
+    result = expand_local_env_vars(&result);
+    result = expand_container_env_vars(&result);
+    expand_devcontainer_id(&result, workspace_folder)
+}
+
 pub(crate) fn devcontainer_id_for(workspace_folder: &Path) -> String {
     let ws_str = workspace_folder.to_string_lossy().to_string();
     let mut hash: u64 = 14695981039346656037;
@@ -1481,6 +1500,28 @@ mod tests {
             build_image(&cfg, &dir.join("devcontainer.json"), &dir, "unused", false).unwrap_err();
         assert!(err.to_string().contains("Build context not found"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_expand_workspace_folder() {
+        let ws = Path::new("/tmp/my-project");
+        assert_eq!(
+            expand_workspace_folder("/workspaces/${localWorkspaceFolderBasename}", ws),
+            "/workspaces/my-project"
+        );
+        assert_eq!(
+            expand_workspace_folder("${localWorkspaceFolder}/src", ws),
+            "/tmp/my-project/src"
+        );
+        assert_eq!(
+            expand_workspace_folder("${containerWorkspaceFolder}/x", ws),
+            "${containerWorkspaceFolder}/x"
+        );
+        let id = devcontainer_id_for(ws);
+        assert_eq!(
+            expand_workspace_folder("/d/${devcontainerId}", ws),
+            format!("/d/{id}")
+        );
     }
 
     #[test]
