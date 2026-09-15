@@ -105,12 +105,15 @@ pub fn merged_exec_env(
     exec_user: Option<&str>,
 ) -> Option<std::collections::HashMap<String, String>> {
     let mut merged = cfg.remote_env_resolved();
-    if let Some(probe) = &cfg.user_env_probe
-        && probe != "none"
-        && let Some(probed) = host::probe_user_env(container_name, exec_user, probe)
-    {
-        for (k, v) in probed {
-            merged.entry(k).or_insert(v);
+    if let Some(probe) = &cfg.user_env_probe {
+        if !host::is_known_probe(probe) {
+            eprintln!("Warning: unknown userEnvProbe '{probe}'");
+        } else if probe != "none"
+            && let Some(probed) = host::probe_user_env(container_name, exec_user, probe)
+        {
+            for (k, v) in probed {
+                merged.entry(k).or_insert(v);
+            }
         }
     }
     if merged.is_empty() {
