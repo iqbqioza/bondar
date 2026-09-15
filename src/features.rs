@@ -11,7 +11,7 @@ pub fn collect_feature_customizations(
 ) -> serde_json::Value {
     let mut merged = serde_json::Map::new();
     for id in feature_ids_in_order(feat_map, order) {
-        let dir = feature_cache_dir().join(sanitize_id(&id));
+        let dir = feature_cache_dir_for(&id);
         let Some(meta) = read_feature_metadata(&dir) else {
             continue;
         };
@@ -59,6 +59,25 @@ fn merge_customization_values(
             }
         }
     }
+}
+
+/// JSON-encoded merged feature customizations for the
+/// `devcontainer.feature_customizations` container label. Docker labels are
+/// immutable after creation, so this is computed from the (pre)fetched
+/// metadata before the container is created. Returns `None` when no feature
+/// declares customizations.
+pub fn feature_customizations_label(
+    features: &Option<HashMap<String, serde_json::Value>>,
+) -> Option<String> {
+    let feat_map = features.clone().unwrap_or_default();
+    if feat_map.is_empty() {
+        return None;
+    }
+    let merged = collect_feature_customizations(&feat_map, &feature_ids_sorted(features));
+    if merged.as_object().is_none_or(|m| m.is_empty()) {
+        return None;
+    }
+    serde_json::to_string(&merged).ok()
 }
 
 /// Container properties a feature may declare in its metadata. They must be
@@ -745,6 +764,11 @@ fn sort_by_installs_after(feat_map: &HashMap<String, serde_json::Value>) -> Vec<
 
 fn feature_cache_dir() -> std::path::PathBuf {
     std::env::temp_dir().join("bondar_features")
+}
+
+/// Cache directory for one feature id (test-visible).
+pub(crate) fn feature_cache_dir_for(id: &str) -> PathBuf {
+    feature_cache_dir().join(sanitize_id(id))
 }
 
 fn sanitize_id(id: &str) -> String {
@@ -1771,6 +1795,26 @@ mod tests {
         }
         out.resize(out.len() + 1024, 0);
         out
+    }
+
+    #[test]
+    fn test_feature_customizations_label() {
+        let id = "ghcr.io/bondar-test/fake-customizations:1";
+        let dir = feature_cache_dir_for(id);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("devcontainer-feature.json"),
+            r#"{"id":"fake-customizations","customizations":{"vscode":{"extensions":["a.b"]}}}"#,
+        )
+        .unwrap();
+        let mut map = HashMap::new();
+        map.insert(id.to_string(), serde_json::json!({}));
+        let label = feature_customizations_label(&Some(map)).unwrap();
+        assert!(label.contains("a.b"), "label was {label}");
+        assert!(feature_customizations_label(&None).is_none());
+        assert!(feature_customizations_label(&Some(HashMap::new())).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
