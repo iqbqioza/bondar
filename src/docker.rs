@@ -17,6 +17,7 @@ pub fn image_metadata_label(image: &str, pull_if_missing: bool) -> Option<String
                 "inspect",
                 "--format",
                 "{{index .Config.Labels \"devcontainer.metadata\"}}",
+                "--",
                 image,
             ])
             .output()
@@ -46,7 +47,7 @@ pub fn image_metadata_label(image: &str, pull_if_missing: bool) -> Option<String
 /// and pulling the name could resolve to a different image.
 pub fn container_metadata_label(container: &str) -> Option<String> {
     let output = Command::new("docker")
-        .args(["inspect", "--format", "{{.Config.Image}}", container])
+        .args(["inspect", "--format", "{{.Config.Image}}", "--", container])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -282,6 +283,7 @@ pub fn container_workspace(name: &str) -> Result<Option<String>> {
             "inspect",
             "--format",
             "{{index .Config.Labels \"devcontainer.local_folder\"}}",
+            "--",
             name,
         ])
         .output()
@@ -320,7 +322,7 @@ pub fn ensure_container_matches_workspace(name: &str, workspace_folder: &Path) -
 /// All labels of a container (empty when it does not exist).
 pub fn container_labels(name: &str) -> std::collections::HashMap<String, String> {
     let output = Command::new("docker")
-        .args(["inspect", "--format", "{{json .Config.Labels}}", name])
+        .args(["inspect", "--format", "{{json .Config.Labels}}", "--", name])
         .output();
     let Ok(output) = output else {
         return std::collections::HashMap::new();
