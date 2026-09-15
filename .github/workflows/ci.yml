@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main, github-cicd]
+    branches: [main]
   push:
     branches: [main]
 
@@ -45,14 +45,14 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Unit tests
-        run: cargo test --bins
+        run: cargo test --locked --bins
 
       - name: Integration tests (docker-gated)
         if: runner.os == 'Linux'
-        run: cargo test --test docker_integration
+        run: cargo test --locked --test docker_integration
 
       - name: Release build
-        run: cargo build --release
+        run: cargo build --locked --release
