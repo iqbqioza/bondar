@@ -2092,3 +2092,36 @@ fn test_workspace_folder_variable_expansion() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_env_var_alias_expansion() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "env-alias",
+        r#"{"name": "int-env-alias", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "remoteEnv": {"FROM_ALIAS": "${env:BONDAR_UNSET_TEST_VAR:fallback}"}, "userEnvProbe": "none"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(
+        up.status.success(),
+        "up failed: {}",
+        String::from_utf8_lossy(&up.stderr)
+    );
+    let out = bondar(&[
+        "exec",
+        "--workspace-folder",
+        ws_str,
+        "--",
+        "sh",
+        "-c",
+        "echo $FROM_ALIAS",
+    ]);
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "fallback");
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
