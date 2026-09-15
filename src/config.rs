@@ -577,6 +577,7 @@ impl DevContainerConfig {
                 }
             }
         }
+        let mut seen_ports: Vec<String> = Vec::new();
         for port in &self.forward_ports {
             match port {
                 ForwardPort::Number(n) if *n == 0 => {
@@ -591,12 +592,22 @@ impl DevContainerConfig {
                 }
                 _ => {}
             }
+            let key = match port {
+                ForwardPort::Number(n) => n.to_string(),
+                ForwardPort::Text(s) => s.clone(),
+            };
+            if seen_ports.contains(&key) {
+                eprintln!("Warning: 'forwardPorts' contains duplicate entry '{key}'");
+            } else {
+                seen_ports.push(key);
+            }
         }
         if let Some(app) = &self.app_port {
             let ports: Vec<&PortValue> = match app {
                 AppPortValue::Single(p) => vec![p],
                 AppPortValue::Multiple(v) => v.iter().collect(),
             };
+            let mut seen_app_ports: Vec<String> = Vec::new();
             for p in ports {
                 match p {
                     PortValue::Number(n) if *n == 0 => {
@@ -610,6 +621,12 @@ impl DevContainerConfig {
                         })?;
                     }
                     _ => {}
+                }
+                let key = crate::docker::port_value_to_string(p);
+                if seen_app_ports.contains(&key) {
+                    eprintln!("Warning: 'appPort' contains duplicate entry '{key}'");
+                } else {
+                    seen_app_ports.push(key);
                 }
             }
         }
