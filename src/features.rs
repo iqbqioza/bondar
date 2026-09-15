@@ -238,6 +238,18 @@ pub fn apply_image_metadata(config: &mut crate::config::DevContainerConfig, raw:
         {
             config.wait_for = Some(wait.to_string());
         }
+        if config.ports_attributes.is_none()
+            && let Some(value) = entry.get("portsAttributes")
+            && value.is_object()
+        {
+            config.ports_attributes = Some(value.clone());
+        }
+        if config.other_ports_attributes.is_none()
+            && let Some(value) = entry.get("otherPortsAttributes")
+            && value.is_object()
+        {
+            config.other_ports_attributes = Some(value.clone());
+        }
         if let Some(run_args) = entry.get("runArgs").and_then(|v| v.as_array()) {
             for arg in run_args {
                 if let Some(arg) = arg.as_str()
@@ -2065,7 +2077,7 @@ mod tests {
         };
         apply_image_metadata(
             &mut cfg,
-            r#"[{"remoteUser":"vscode"},{"containerEnv":{"FROM_IMAGE":"1","SHARED":"lost"},"mounts":[{"type":"volume","source":"v","target":"/v"}],"privileged":true,"capAdd":["SYS_PTRACE"],"userEnvProbe":"loginShell","updateRemoteUserUID":false,"waitFor":"postCreateCommand","runArgs":["--add-host=meta:127.0.0.1","--add-host=meta:127.0.0.1"],"remoteEnv":{"META_R":"1","UNSET_R":null}}]"#,
+            r#"[{"remoteUser":"vscode"},{"containerEnv":{"FROM_IMAGE":"1","SHARED":"lost"},"mounts":[{"type":"volume","source":"v","target":"/v"}],"privileged":true,"capAdd":["SYS_PTRACE"],"userEnvProbe":"loginShell","updateRemoteUserUID":false,"waitFor":"postCreateCommand","runArgs":["--add-host=meta:127.0.0.1","--add-host=meta:127.0.0.1"],"portsAttributes":{"8080":{"onAutoForward":"ignore"}},"otherPortsAttributes":{"protocol":"udp"},"remoteEnv":{"META_R":"1","UNSET_R":null}}]"#,
         );
         assert_eq!(cfg.remote_user.as_deref(), Some("vscode"));
         assert_eq!(cfg.container_env.get("SHARED").unwrap(), "user");
@@ -2081,6 +2093,21 @@ mod tests {
             Some("1".to_string())
         );
         assert_eq!(cfg.run_args, vec!["--add-host=meta:127.0.0.1".to_string()]);
+        assert_eq!(
+            cfg.ports_attributes
+                .as_ref()
+                .and_then(|v| v.get("8080"))
+                .and_then(|v| v.get("onAutoForward"))
+                .and_then(|v| v.as_str()),
+            Some("ignore")
+        );
+        assert_eq!(
+            cfg.other_ports_attributes
+                .as_ref()
+                .and_then(|v| v.get("protocol"))
+                .and_then(|v| v.as_str()),
+            Some("udp")
+        );
         assert!(cfg.remote_env.contains_key("UNSET_R"));
         assert_eq!(cfg.remote_env.get("UNSET_R").cloned().flatten(), None);
         // User values are not overridden by metadata
