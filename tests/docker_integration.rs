@@ -1838,3 +1838,24 @@ fn test_exec_paused_container_error() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_duplicate_port_entries_warn() {
+    let ws = make_workspace(
+        "dup-port-entries",
+        r#"{"name": "int-dup-port-entries", "image": "ubuntu:22.04", "forwardPorts": [8080, 8080], "appPort": [9090, 9090]}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let out = bondar(&["build", "--workspace-folder", ws_str]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("'forwardPorts' contains duplicate entry '8080'"),
+        "expected a forwardPorts duplicate warning: {stderr}"
+    );
+    assert!(
+        stderr.contains("'appPort' contains duplicate entry '9090'"),
+        "expected an appPort duplicate warning: {stderr}"
+    );
+    cleanup(&ws);
+}
