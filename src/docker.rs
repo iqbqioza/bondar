@@ -1278,7 +1278,7 @@ pub fn expand_container_env_from_map(
 /// Unmatched references are left untouched. Both `localEnv` and `containerEnv`
 /// use the same semantics; `containerEnv` refs fall back to the host only when
 /// the container-side value is unknown (documented deviation).
-fn expand_env_vars(input: &str, prefix: &str) -> String {
+fn expand_env_vars(input: &str, prefixes: &[&str]) -> String {
     let mut result = String::new();
     let mut chars = input.chars().peekable();
 
@@ -1294,9 +1294,12 @@ fn expand_env_vars(input: &str, prefix: &str) -> String {
                 }
                 var_content.push(nc);
             }
-            let tag = format!("{prefix}:");
-            if found_end && var_content.starts_with(&tag) {
-                let rest = &var_content[tag.len()..];
+            let matched = prefixes.iter().find_map(|prefix| {
+                var_content
+                    .strip_prefix(&format!("{prefix}:"))
+                    .map(|rest| (*prefix, rest))
+            });
+            if found_end && let Some((prefix, rest)) = matched {
                 let (var_name, default_val) = if let Some(colon_pos) = rest.find(':') {
                     (&rest[..colon_pos], Some(&rest[colon_pos + 1..]))
                 } else {
@@ -1327,11 +1330,14 @@ fn expand_env_vars(input: &str, prefix: &str) -> String {
 }
 
 fn expand_container_env_vars(input: &str) -> String {
-    expand_env_vars(input, "containerEnv")
+    expand_env_vars(input, &["containerEnv"])
 }
 
+/// Host environment variables: `${localEnv:VAR}` and the legacy `${env:VAR}`
+/// alias (both are treated identically by the reference CLI). A missing
+/// variable resolves to the default in `${VAR:default}` or to an empty string.
 fn expand_local_env_vars(input: &str) -> String {
-    expand_env_vars(input, "localEnv")
+    expand_env_vars(input, &["localEnv", "env"])
 }
 
 pub fn resolve_secrets(config: &DevContainerConfig) -> Vec<(String, String)> {
@@ -1503,6 +1509,24 @@ mod tests {
     }
 
     #[test]
+    fn test_expand_env_alias() {
+        // `${env:VAR}` behaves like `${localEnv:VAR}` (reference CLI alias)
+        assert_eq!(
+            expand_local_env_vars("${env:BONDAR_UNSET_TEST_VAR:fallback}"),
+            "fallback"
+        );
+        assert_eq!(
+            expand_local_env_vars("${localEnv:BONDAR_UNSET_TEST_VAR:fallback}"),
+            "fallback"
+        );
+        assert_eq!(expand_local_env_vars("${env:BONDAR_UNSET_TEST_VAR}"), "");
+        assert_eq!(
+            expand_local_env_vars("${environment:X}"),
+            "${environment:X}"
+        );
+    }
+
+    #[test]
     fn test_expand_workspace_folder() {
         let ws = Path::new("/tmp/my-project");
         assert_eq!(
@@ -1521,6 +1545,10 @@ mod tests {
         assert_eq!(
             expand_workspace_folder("/d/${devcontainerId}", ws),
             format!("/d/{id}")
+        );
+        assert_eq!(
+            expand_workspace_folder("/x/${env:BONDAR_UNSET_TEST_VAR:def}", ws),
+            "/x/def"
         );
     }
 
