@@ -163,11 +163,13 @@ bondar read-configuration [--include-merged-configuration]
 Constraints enforced by validation:
 
 - Exactly one of `image`, `build` or `dockerComposeFile`.
-- `dockerComposeFile` requires `service`.
-- `workspaceMount` requires `workspaceFolder`.
-- Empty strings are rejected for `name`, `image`, `service`, `workspaceFolder`, `build.dockerfile`, `dockerComposeFile`.
-- `containerEnv`/`remoteEnv` keys must not be empty.
-- Object-form `mounts` entries must specify `type` and `target`.
+- `dockerComposeFile` requires `service`; `shutdownAction: "stopCompose"` warns without compose.
+- `workspaceMount` requires `workspaceFolder` and must specify a target (`target=`, `dst=` or `destination=`); a target differing from `workspaceFolder` is warned about.
+- Empty strings are rejected for `name`, `image`, `service`, `workspaceFolder`, `build.dockerfile`, `dockerComposeFile`, `build.context` and `build.options` entries.
+- `containerEnv`/`remoteEnv` keys must not be empty or contain `=`; `build.args` keys must not be empty or contain `=`.
+- Object-form `mounts` entries must specify `type` and `target`; `source` must not be empty.
+- String `mounts` entries must specify a target; duplicate mount targets (including the workspace mount) are rejected.
+- `secrets` object entries require a string `localEnv`.
 - `forwardPorts`/`appPort` string forms are validated (port numbers, ranges, `host:container`, IPv6 brackets, `/udp`/`/tcp`).
 
 When `workspaceFolder` is omitted, the workspace is mounted at `/workspaces/<workspace directory name>` (the spec default) for `image`/`build` configurations; compose configurations default to `/`.
