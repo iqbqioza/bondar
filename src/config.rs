@@ -238,14 +238,10 @@ impl DevContainerConfig {
             ));
         }
         if let Some(n) = &self.name {
-            let trimmed = n.trim();
-            if trimmed.is_empty() {
+            // The schema allows any non-empty name; container/image names are
+            // sanitized (with fallbacks) when deriving names from it.
+            if n.trim().is_empty() {
                 return Err(BondarError::Config("'name' must not be empty".to_string()));
-            }
-            if !trimmed.chars().any(|c| c.is_ascii_alphanumeric()) {
-                return Err(BondarError::Config(
-                    "'name' must contain at least one ASCII alphanumeric character".to_string(),
-                ));
             }
         }
         if let Some(cn) = &self.container_name_override {
@@ -1018,11 +1014,8 @@ mod tests {
     fn test_validate_symbolic_name() {
         let cfg: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "name": "!!!"}"#).unwrap();
-        assert!(cfg.validate().is_err());
-
-        let ok: DevContainerConfig =
-            serde_json::from_str(r#"{"image": "ubuntu", "name": "my-dev"}"#).unwrap();
-        assert!(ok.validate().is_ok());
+        assert!(cfg.validate().is_ok());
+        assert_eq!(cfg.container_name(Path::new("/tmp/x")), "bondar----");
     }
 
     #[test]
@@ -1198,10 +1191,29 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_unicode_name_rejected() {
+    fn test_validate_unicode_name_accepted() {
         let cfg: DevContainerConfig =
             serde_json::from_str(r#"{"image": "ubuntu", "name": "テスト"}"#).unwrap();
-        assert!(cfg.validate().is_err());
+        assert!(cfg.validate().is_ok());
+        // The derived container and image names stay valid
+        assert_eq!(cfg.container_name(Path::new("/tmp/x")), "bondar----");
+        let backend = crate::docker::resolve_image_name(
+            &DevContainerConfig {
+                build: Some(crate::config::BuildConfig {
+                    dockerfile: Some("Dockerfile".to_string()),
+                    context: None,
+                    args: Default::default(),
+                    options: vec![],
+                    target: None,
+                    cache_from: None,
+                }),
+                name: Some("テスト".to_string()),
+                ..Default::default()
+            },
+            Path::new("/tmp/x"),
+        )
+        .unwrap();
+        assert!(backend.starts_with("bondar-workspace-"));
     }
 
     #[test]
