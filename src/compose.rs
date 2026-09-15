@@ -415,13 +415,21 @@ fn write_override_file(path: &Path, contents: String) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
+        use std::io::Write;
         if path.is_symlink() {
             return Err(BondarError::Io(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 format!("refusing to overwrite symlink at {}", path.display()),
             )));
         }
-        std::fs::write(path, contents).map_err(BondarError::Io)?;
+        // O_EXCL equivalent: fail instead of following an existing file
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(BondarError::Io)?;
+        file.write_all(contents.as_bytes())
+            .map_err(BondarError::Io)?;
     }
     Ok(())
 }
@@ -1072,6 +1080,17 @@ mod tests {
         assert_eq!(compose_named_volume("../data:/data"), None);
         assert_eq!(compose_named_volume("/data"), None);
         assert_eq!(compose_named_volume("~/data:/data"), None);
+    }
+
+    #[test]
+    fn test_override_file_refuses_existing_path() {
+        let dir = std::env::temp_dir().join("bondar-ovr-create-new");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("exists.yml");
+        std::fs::write(&path, "existing").unwrap();
+        assert!(write_override_file(&path, "new".to_string()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
