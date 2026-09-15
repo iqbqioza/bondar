@@ -2217,3 +2217,45 @@ fn test_compose_service_without_command_stays_running() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_default_build_context_is_dockerfile_dir() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "build-ctx",
+        r#"{"name": "int-build-ctx", "build": {"dockerfile": "sub/Dockerfile"}, "workspaceFolder": "/workspace"}"#,
+    );
+    std::fs::create_dir_all(ws.join(".devcontainer/sub")).unwrap();
+    std::fs::write(
+        ws.join(".devcontainer/sub/Dockerfile"),
+        "FROM ubuntu:22.04\nCOPY marker.txt /marker.txt\n",
+    )
+    .unwrap();
+    // The correct context is the Dockerfile directory; a decoy file in the
+    // devcontainer directory must not be used.
+    std::fs::write(ws.join(".devcontainer/sub/marker.txt"), "context-marker").unwrap();
+    std::fs::write(ws.join(".devcontainer/marker.txt"), "wrong-context").unwrap();
+    let ws_str = ws.to_str().unwrap();
+
+    let build = bondar(&["build", "--workspace-folder", ws_str]);
+    assert!(
+        build.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let image = format!("bondar-int-build-ctx-{}", workspace_hash8(&ws));
+    let marker = Command::new("docker")
+        .args(["run", "--rm", &image, "cat", "/marker.txt"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&marker.stdout).trim(),
+        "context-marker",
+        "default build context should be the Dockerfile directory"
+    );
+    let _ = Command::new("docker").args(["rmi", "-f", &image]).output();
+    cleanup(&ws);
+}

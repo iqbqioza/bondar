@@ -128,7 +128,7 @@ pub fn build_image(
             let expanded = expand_vars_for_host_with_target(c, workspace_folder, &workspace_target);
             config_dir.join(&expanded)
         })
-        .unwrap_or_else(|| config_dir.to_path_buf());
+        .unwrap_or_else(|| default_build_context(&dockerfile_path, config_dir));
 
     if !context.is_dir() {
         return Err(BondarError::NotFound(format!(
@@ -461,6 +461,16 @@ pub fn stop_container(name: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// Default build context when the config does not set one: the directory
+/// containing the Dockerfile, like the reference CLI (`dockerFile` in a
+/// subdirectory must not change the context to the devcontainer.json folder).
+pub(crate) fn default_build_context(dockerfile_path: &Path, config_dir: &Path) -> PathBuf {
+    match dockerfile_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => config_dir.to_path_buf(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1513,6 +1523,23 @@ mod tests {
             build_image(&cfg, &dir.join("devcontainer.json"), &dir, "unused", false).unwrap_err();
         assert!(err.to_string().contains("Build context not found"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_default_build_context() {
+        // Dockerfile in a subdirectory: context follows it, not the config dir
+        assert_eq!(
+            default_build_context(
+                Path::new("/a/b/.devcontainer/sub/Dockerfile"),
+                Path::new("/a/b/.devcontainer")
+            ),
+            PathBuf::from("/a/b/.devcontainer/sub")
+        );
+        // A Dockerfile path without a parent falls back to the config dir
+        assert_eq!(
+            default_build_context(Path::new("Dockerfile"), Path::new("/a/b")),
+            PathBuf::from("/a/b")
+        );
     }
 
     #[test]
