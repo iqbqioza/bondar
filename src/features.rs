@@ -1017,6 +1017,11 @@ fn install_in_container(
     // Pass feature options as environment variables. NOTE: all `-e` flags must
     // come before the container name; `docker exec [OPTIONS] CONTAINER ...`
     // treats everything after the container name as the command.
+    for (env_name, first, second) in option_env_name_collisions(opts) {
+        eprintln!(
+            "  Warning: feature options '{first}' and '{second}' both map to environment variable '{env_name}'"
+        );
+    }
     if let serde_json::Value::Object(map) = opts {
         for (k, v) in map {
             // `installsAfter` is metadata consumed by bondar, not an
@@ -1081,6 +1086,28 @@ fn install_in_container(
     );
 
     Ok(())
+}
+
+/// Option pairs that map to the same environment variable name after the
+/// spec normalization (e.g. `fooBar` and `FOOBAR`).
+fn option_env_name_collisions(opts: &serde_json::Value) -> Vec<(String, String, String)> {
+    let Some(map) = opts.as_object() else {
+        return Vec::new();
+    };
+    let mut seen: HashMap<String, String> = HashMap::new();
+    let mut collisions = Vec::new();
+    for key in map.keys() {
+        if key == "installsAfter" {
+            continue;
+        }
+        let env_name = option_env_name(key);
+        if let Some(first) = seen.get(&env_name) {
+            collisions.push((env_name, first.clone(), key.clone()));
+        } else {
+            seen.insert(env_name, key.clone());
+        }
+    }
+    collisions
 }
 
 /// Convert a feature option name to its environment variable form, per the
@@ -1497,6 +1524,28 @@ mod tests {
         assert_eq!(
             canonical_feature_id("localhost:5001/a/b@sha256:abc123"),
             "localhost:5001/a/b"
+        );
+    }
+
+    #[test]
+    fn test_option_env_name_collisions() {
+        let collisions =
+            option_env_name_collisions(&serde_json::json!({"fooBar": 1, "FOOBAR": 2, "x": 3}));
+        assert_eq!(
+            collisions,
+            vec![(
+                "FOOBAR".to_string(),
+                "fooBar".to_string(),
+                "FOOBAR".to_string()
+            )]
+        );
+        assert!(option_env_name_collisions(&serde_json::json!({"a": 1, "b": 2})).is_empty());
+        // installsAfter is metadata, not an option
+        assert!(
+            option_env_name_collisions(
+                &serde_json::json!({"installsAfter": [], "INSTALLSAFTER": 1})
+            )
+            .is_empty()
         );
     }
 
