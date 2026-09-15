@@ -272,6 +272,13 @@ impl DevContainerConfig {
                 "'build.dockerfile'/'dockerFile' must not be empty".to_string(),
             ));
         }
+        if let Some(context) = self.effective_context()
+            && context.trim().is_empty()
+        {
+            return Err(BondarError::Config(
+                "'build.context'/'context' must not be empty".to_string(),
+            ));
+        }
         if self.docker_compose_file.is_some() && self.service.is_none() {
             return Err(BondarError::Config(
                 "'service' must be specified when using 'dockerComposeFile'".to_string(),
@@ -1003,6 +1010,23 @@ mod tests {
             r#"{"build": {"dockerfile": "Dockerfile", "options": ["--pull"], "args": {"A": "b"}}}"#,
         )
         .unwrap();
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_build_context() {
+        let build_ctx: DevContainerConfig =
+            serde_json::from_str(r#"{"build": {"dockerfile": "Dockerfile", "context": ""}}"#)
+                .unwrap();
+        assert!(build_ctx.validate().is_err());
+
+        let top_ctx: DevContainerConfig =
+            serde_json::from_str(r#"{"dockerFile": "Dockerfile", "context": ""}"#).unwrap();
+        assert!(top_ctx.validate().is_err());
+
+        let ok: DevContainerConfig =
+            serde_json::from_str(r#"{"build": {"dockerfile": "Dockerfile", "context": ".."}}"#)
+                .unwrap();
         assert!(ok.validate().is_ok());
     }
 
