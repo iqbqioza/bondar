@@ -34,7 +34,7 @@ No. Validation rejects configurations that specify more than one of `image`, `bu
 
 ### Why is `workspaceFolder` required with `workspaceMount`?
 
-bondar requires `workspaceFolder` so it knows where the mounted workspace is located inside the container. Set it to the mount target when using `workspaceMount`.
+bondar requires `workspaceFolder` so it knows where the mounted workspace is located inside the container. Set it to the mount target when using `workspaceMount` (the mount must include `target=`, `dst=` or `destination=`).
 
 ### Why are empty strings rejected for `name`, `image`, etc.?
 
