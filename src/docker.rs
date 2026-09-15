@@ -129,6 +129,13 @@ pub fn build_image(
         })
         .unwrap_or_else(|| config_dir.to_path_buf());
 
+    if !context.is_dir() {
+        return Err(BondarError::NotFound(format!(
+            "Build context not found or not a directory: {} (resolved relative to the devcontainer.json directory)",
+            context.display()
+        )));
+    }
+
     let context_str = context
         .to_str()
         .ok_or_else(|| BondarError::Config("Build context path is not valid UTF-8".to_string()))?;
@@ -1396,6 +1403,29 @@ pub fn get_workspace_folder(provided: Option<PathBuf>) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_image_missing_context() {
+        let dir = std::env::temp_dir().join("bondar-build-context-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Dockerfile"), "FROM ubuntu:22.04\n").unwrap();
+        let cfg = DevContainerConfig {
+            build: Some(crate::config::BuildConfig {
+                dockerfile: Some("Dockerfile".to_string()),
+                context: Some("missing".to_string()),
+                args: Default::default(),
+                options: vec![],
+                target: None,
+                cache_from: None,
+            }),
+            ..Default::default()
+        };
+        let err =
+            build_image(&cfg, &dir.join("devcontainer.json"), &dir, "unused", false).unwrap_err();
+        assert!(err.to_string().contains("Build context not found"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn test_publish_port_arg_number() {
