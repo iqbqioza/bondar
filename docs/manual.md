@@ -76,6 +76,8 @@ The `up` flow:
 
 With `waitFor`, scripts after the specified one run in the background.
 
+`userEnvProbe` defaults to `loginInteractiveShell` (the spec default); set it to `"none"` to skip probing.
+
 ### `bondar down`
 
 Stops and removes the dev container.

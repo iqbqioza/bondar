@@ -193,10 +193,8 @@ pub fn run(
         )
     };
 
-    let probed_env = if let Some(probe) = &cfg.user_env_probe
-        && probe != "none"
-        && host::is_known_probe(probe)
-    {
+    let probe = host::effective_probe(cfg.user_env_probe.as_deref());
+    let probed_env = if probe != "none" && host::is_known_probe(probe) {
         println!("Probing user env with {probe}...");
         let exec_user = cfg.remote_user.as_deref().or(cfg.container_user.as_deref());
         host::probe_user_env(&container_name, exec_user, probe)
@@ -642,10 +640,8 @@ fn run_compose(
         })
         .collect();
 
-    let probed_env = if let Some(probe) = &cfg.user_env_probe
-        && probe != "none"
-        && host::is_known_probe(probe)
-    {
+    let probe = host::effective_probe(cfg.user_env_probe.as_deref());
+    let probed_env = if probe != "none" && host::is_known_probe(probe) {
         println!("Probing user env with {probe}...");
         host::probe_user_env(&container_name, exec_user, probe)
     } else {

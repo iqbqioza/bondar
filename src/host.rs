@@ -404,6 +404,15 @@ pub fn handle_update_remote_user_uid(
     Ok(())
 }
 
+/// Spec default for `userEnvProbe`.
+pub const DEFAULT_USER_ENV_PROBE: &str = "loginInteractiveShell";
+
+/// The effective probe mode: an unset `userEnvProbe` defaults to
+/// `loginInteractiveShell` per the spec.
+pub fn effective_probe(probe: Option<&str>) -> &str {
+    probe.unwrap_or(DEFAULT_USER_ENV_PROBE)
+}
+
 /// Whether the value is a supported `userEnvProbe` mode.
 pub fn is_known_probe(probe: &str) -> bool {
     matches!(
@@ -566,6 +575,13 @@ fn parse_id_output(output: &str, prefix: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_effective_probe() {
+        assert_eq!(effective_probe(None), "loginInteractiveShell");
+        assert_eq!(effective_probe(Some("none")), "none");
+        assert!(is_known_probe(effective_probe(None)));
+    }
 
     #[test]
     fn test_is_known_probe() {
