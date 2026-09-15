@@ -487,11 +487,20 @@ impl DevContainerConfig {
             }
         }
         if let Some(feats) = &self.features {
-            for id in feats.keys() {
+            for (id, opts) in feats {
                 if id.trim().is_empty() {
                     return Err(BondarError::Config(
                         "'features' keys must not be empty".to_string(),
                     ));
+                }
+                if let Some(options) = opts.as_object() {
+                    for key in options.keys() {
+                        if key.trim().is_empty() {
+                            return Err(BondarError::Config(format!(
+                                "'features' options for '{id}' must not have empty names"
+                            )));
+                        }
+                    }
                 }
             }
         }
@@ -1006,6 +1015,21 @@ mod tests {
         let empty_service: DevContainerConfig =
             serde_json::from_str(r#"{"dockerComposeFile": "c.yml", "service": ""}"#).unwrap();
         assert!(empty_service.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_empty_feature_option_names() {
+        let bad: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "features": {"ghcr.io/a/b:1": {"": true}}}"#,
+        )
+        .unwrap();
+        assert!(bad.validate().is_err());
+
+        let ok: DevContainerConfig = serde_json::from_str(
+            r#"{"image": "ubuntu", "features": {"ghcr.io/a/b:1": {"flag": true}}}"#,
+        )
+        .unwrap();
+        assert!(ok.validate().is_ok());
     }
 
     #[test]
