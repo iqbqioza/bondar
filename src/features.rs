@@ -133,10 +133,19 @@ fn container_properties_from_value(
 /// Parse the `devcontainer.metadata` image label: a JSON array of partial
 /// configurations (or a single object).
 fn metadata_entries(raw: &str) -> Vec<serde_json::Value> {
-    match serde_json::from_str::<serde_json::Value>(raw.trim()) {
-        Ok(serde_json::Value::Array(items)) => items,
-        Ok(other) => vec![other],
-        Err(_) => Vec::new(),
+    let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(raw.trim()) else {
+        return Vec::new();
+    };
+    // Some images store the label value as a JSON string containing the
+    // metadata JSON; unwrap it once.
+    if let serde_json::Value::String(inner) = &parsed
+        && let Ok(unwrapped) = serde_json::from_str::<serde_json::Value>(inner)
+    {
+        parsed = unwrapped;
+    }
+    match parsed {
+        serde_json::Value::Array(items) => items,
+        other => vec![other],
     }
 }
 
@@ -1821,6 +1830,17 @@ mod tests {
     fn test_sort_by_installs_after_empty() {
         let empty: HashMap<String, serde_json::Value> = HashMap::new();
         assert!(sort_by_installs_after(&empty).is_empty());
+    }
+
+    #[test]
+    fn test_double_encoded_metadata() {
+        let inner = r#"[{"remoteUser":"vscode","containerEnv":{"A":"1"}}]"#;
+        let double_encoded = serde_json::to_string(inner).unwrap();
+        assert_eq!(declared_entrypoints(&double_encoded), Vec::<String>::new());
+        let mut cfg = crate::config::DevContainerConfig::default();
+        apply_image_metadata(&mut cfg, &double_encoded);
+        assert_eq!(cfg.remote_user.as_deref(), Some("vscode"));
+        assert_eq!(cfg.container_env.get("A").unwrap(), "1");
     }
 
     #[test]
