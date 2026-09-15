@@ -480,6 +480,12 @@ pub fn create_and_start_container(
                     "Failed to start container {container_name}"
                 )));
             }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if !container_running(container_name)? {
+                eprintln!(
+                    "Warning: container {container_name} is not running (it may have exited immediately); check 'bondar logs'"
+                );
+            }
             return Ok(());
         }
     }

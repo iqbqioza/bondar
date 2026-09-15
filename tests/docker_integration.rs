@@ -1513,7 +1513,12 @@ fn test_container_exiting_immediately_warns() {
     );
     let ws_str = ws.to_str().unwrap();
 
-    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    let up = bondar(&[
+        "up",
+        "--workspace-folder",
+        ws_str,
+        "--remove-existing-container",
+    ]);
     assert!(
         up.status.success(),
         "up failed: {}",
