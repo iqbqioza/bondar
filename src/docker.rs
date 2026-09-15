@@ -335,6 +335,29 @@ pub fn container_labels(name: &str) -> std::collections::HashMap<String, String>
         .unwrap_or_default()
 }
 
+/// `(running, paused)` via a single inspect; `None` when the container does
+/// not exist.
+fn container_state(name: &str) -> Option<(bool, bool)> {
+    let output = Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{.State.Running}} {{.State.Paused}}",
+            "--",
+            name,
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let mut parts = raw.split_whitespace();
+    let running = parts.next() == Some("true");
+    let paused = parts.next() == Some("true");
+    Some((running, paused))
+}
+
 pub fn container_running(name: &str) -> Result<bool> {
     let output = Command::new("docker")
         .args(["ps", "--format", "{{.Names}}"])
@@ -1342,10 +1365,18 @@ pub fn exec_in_container(
     workspace_folder: Option<&Path>,
     container_env: Option<&HashMap<String, String>>,
 ) -> Result<()> {
-    if !container_running(container_name)? {
-        return Err(BondarError::Docker(format!(
-            "Container {container_name} is not running; run 'bondar up' first"
-        )));
+    match container_state(container_name) {
+        Some((true, true)) => {
+            return Err(BondarError::Docker(format!(
+                "Container {container_name} is paused; unpause it first ('docker unpause {container_name}')"
+            )));
+        }
+        Some((true, false)) => {}
+        _ => {
+            return Err(BondarError::Docker(format!(
+                "Container {container_name} is not running; run 'bondar up' first"
+            )));
+        }
     }
 
     let mut cmd = Command::new("docker");

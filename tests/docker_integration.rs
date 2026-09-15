@@ -1785,3 +1785,40 @@ fn test_duplicate_forward_ports_deduplicated() {
     assert!(down.status.success());
     cleanup(&ws);
 }
+
+#[test]
+fn test_exec_paused_container_error() {
+    if !docker_available() {
+        eprintln!("skipping: docker not available");
+        return;
+    }
+    let ws = make_workspace(
+        "paused",
+        r#"{"name": "int-paused", "image": "ubuntu:22.04", "workspaceFolder": "/workspace", "userEnvProbe": "none"}"#,
+    );
+    let ws_str = ws.to_str().unwrap();
+    let up = bondar(&["up", "--workspace-folder", ws_str]);
+    assert!(up.status.success());
+
+    assert!(
+        Command::new("docker")
+            .args(["pause", "bondar-int-paused"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let exec = bondar(&["exec", "--workspace-folder", ws_str, "--", "true"]);
+    assert!(!exec.status.success());
+    assert!(
+        String::from_utf8_lossy(&exec.stderr).contains("is paused"),
+        "expected a paused-container error: {}",
+        String::from_utf8_lossy(&exec.stderr)
+    );
+
+    let _ = Command::new("docker")
+        .args(["unpause", "bondar-int-paused"])
+        .output();
+    let down = bondar(&["down", "--workspace-folder", ws_str]);
+    assert!(down.status.success());
+    cleanup(&ws);
+}
