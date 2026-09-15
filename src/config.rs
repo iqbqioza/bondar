@@ -401,6 +401,13 @@ impl DevContainerConfig {
                         "'build.args' keys must not be empty".to_string(),
                     ));
                 }
+                if key.contains('=') {
+                    // docker would split at the first '=' and silently use a
+                    // different key
+                    return Err(BondarError::Config(format!(
+                        "'build.args' key '{key}' must not contain '='"
+                    )));
+                }
             }
         }
         if let Some(f) = &self.docker_compose_file {
@@ -910,6 +917,12 @@ mod tests {
             serde_json::from_str(r#"{"build": {"dockerfile": "Dockerfile", "args": {"": "v"}}}"#)
                 .unwrap();
         assert!(bad_arg.validate().is_err());
+
+        let eq_arg: DevContainerConfig = serde_json::from_str(
+            r#"{"build": {"dockerfile": "Dockerfile", "args": {"A=B": "v"}}}"#,
+        )
+        .unwrap();
+        assert!(eq_arg.validate().is_err());
 
         let ok: DevContainerConfig = serde_json::from_str(
             r#"{"build": {"dockerfile": "Dockerfile", "options": ["--pull"], "args": {"A": "b"}}}"#,

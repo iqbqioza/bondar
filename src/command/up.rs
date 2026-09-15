@@ -68,11 +68,6 @@ pub fn run(
     }
 
     let container_name = cfg.container_name(&ws);
-    if container_name.len() > 255 {
-        eprintln!(
-            "Warning: container name '{container_name}' exceeds Docker's 255 character limit; 'docker run' may fail"
-        );
-    }
     let (was_existing, was_running) = docker::container_exists_and_running(&container_name)?;
     // A same-basename workspace may have created a container with this name;
     // never attach to, start or remove another workspace's container.
