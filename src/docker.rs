@@ -835,7 +835,7 @@ pub fn validate_port_spec(s: &str) -> std::result::Result<(), String> {
             return Err("unterminated IPv6 address".to_string());
         };
         let rest = &s[end + 1..];
-        let Some((_, ports_part)) = rest.split_once(':') else {
+        let Some(ports_part) = rest.strip_prefix(':') else {
             return Err("invalid IPv6 port form".to_string());
         };
         let parts: Vec<&str> = ports_part.split(':').collect();
@@ -1027,7 +1027,7 @@ fn publish_ipv6_arg(spec: &str) -> Option<String> {
     let rest = &spec[end + 1..];
     // Rest is ":ports"; split off the leading separator and reject any
     // additional empty segment (e.g. "[::1]:8080:").
-    let (_, ports_part) = rest.split_once(':')?;
+    let ports_part = rest.strip_prefix(':')?;
     let ports: Vec<&str> = ports_part.split(':').collect();
     if ports.iter().any(|p| p.is_empty()) {
         return None;
@@ -1771,12 +1771,21 @@ mod tests {
         assert!(validate_port_spec("[::1]:8080:").is_err());
         assert!(validate_port_spec("[::1]:8080:80:").is_err());
         assert!(validate_port_spec("[::1]").is_err());
+        // Anything between ']' and the port separator is rejected
+        assert!(validate_port_spec("[::1]x:8080").is_err());
+        assert!(validate_port_spec("[::1]8080:80").is_err());
     }
 
     #[test]
     fn test_publish_ipv6_trailing_colon_rejected() {
         assert_eq!(publish_port_arg("[::1]:8080:"), None);
         assert_eq!(publish_port_arg("[::1]:8080:80:"), None);
+    }
+
+    #[test]
+    fn test_publish_ipv6_requires_separator_after_bracket() {
+        assert_eq!(publish_port_arg("[::1]x:8080"), None);
+        assert_eq!(publish_port_arg("[::1]8080:80"), None);
     }
 
     #[test]
